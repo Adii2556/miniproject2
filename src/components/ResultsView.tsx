@@ -17,8 +17,8 @@ interface ResultsViewProps {
   onToast: (msg: string) => void
 }
 
-/** Small Docent avatar bubble used at the head of each chat-style block. */
-function DocentAvatar() {
+/** Small DocLense avatar bubble used at the head of each chat-style block. */
+function DocLenseAvatar() {
   return (
     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-moss text-cream shadow-[0_2px_0_#0e4740] dark:bg-persimmon-dark dark:text-[#2b1206] dark:shadow-[0_2px_0_#b4532a]">
       <svg width="19" height="19" viewBox="0 0 48 48" fill="none" aria-hidden>
@@ -86,7 +86,7 @@ export default function ResultsView({ fileName, stats, result, generated, onToas
       {/* ---------- SUGGESTED TITLE ---------- */}
       {generated.summary && result.title && (
         <motion.article {...blockAnim(i++)} className="flex gap-3">
-          <DocentAvatar />
+          <DocLenseAvatar />
           <div className="min-w-0 flex-1 rounded-3xl rounded-tl-lg border border-moss/20 bg-cream p-5 shadow-sm dark:border-white/10 dark:bg-panel-dark">
             <BlockHeader icon={Sparkles} label="Suggested title" accent="bg-persimmon-mist text-persimmon dark:bg-persimmon-dark/15 dark:text-persimmon-dark" onCopy={() => copy('title', result.title ?? '')} copied={copiedKey === 'title'} />
             <h2 className="mt-2.5 font-serif text-2xl font-semibold leading-snug tracking-tight text-ink dark:text-text-dark sm:text-[1.75rem]">{result.title}</h2>
@@ -98,7 +98,7 @@ export default function ResultsView({ fileName, stats, result, generated, onToas
       {/* ---------- SUMMARY ---------- */}
       {generated.summary && summaryText && (
         <motion.article {...blockAnim(i++)} className="flex gap-3">
-          <DocentAvatar />
+          <DocLenseAvatar />
           <div className="min-w-0 flex-1 rounded-3xl rounded-tl-lg border border-moss/20 bg-cream p-5 shadow-sm dark:border-white/10 dark:bg-panel-dark">
             <BlockHeader icon={AlignLeft} label="Summary" accent="bg-moss-mist text-moss-deep dark:bg-moss/25 dark:text-[#7fd6c2]" onCopy={() => copy('summary', summaryText)} copied={copiedKey === 'summary'} />
             <div className="mt-2.5 space-y-3 font-body text-[15px] leading-[1.75] text-ink dark:text-text-dark/95">
@@ -111,7 +111,7 @@ export default function ResultsView({ fileName, stats, result, generated, onToas
       {/* ---------- KEY POINTS ---------- */}
       {generated.keyPoints && result.keyPoints && result.keyPoints.length > 0 && (
         <motion.article {...blockAnim(i++)} className="flex gap-3">
-          <DocentAvatar />
+          <DocLenseAvatar />
           <div className="min-w-0 flex-1 rounded-3xl rounded-tl-lg border border-moss/20 bg-cream p-5 shadow-sm dark:border-white/10 dark:bg-panel-dark">
             <BlockHeader icon={ListChecks} label={`Key points · ${result.keyPoints.length}`} accent="bg-moss-mist text-moss-deep dark:bg-moss/25 dark:text-[#7fd6c2]" onCopy={() => copy('keypoints', result.keyPoints!.map(p => `• ${p}`).join('\n'))} copied={copiedKey === 'keypoints'} />
             <ol className="mt-3 space-y-2.5">
@@ -129,7 +129,7 @@ export default function ResultsView({ fileName, stats, result, generated, onToas
       {/* ---------- KEYWORDS ---------- */}
       {generated.keywords && result.keywords && result.keywords.length > 0 && (
         <motion.article {...blockAnim(i++)} className="flex gap-3">
-          <DocentAvatar />
+          <DocLenseAvatar />
           <div className="min-w-0 flex-1 rounded-3xl rounded-tl-lg border border-moss/20 bg-cream p-5 shadow-sm dark:border-white/10 dark:bg-panel-dark">
             <BlockHeader icon={Tags} label={`Keywords · ${result.keywords.length}`} accent="bg-[#f4ead0] text-[#8a5b0e] dark:bg-gold-dark/15 dark:text-gold-dark" onCopy={() => copy('keywords', result.keywords!.join(', '))} copied={copiedKey === 'keywords'} />
             <div className="mt-3 flex flex-wrap gap-1.5">
@@ -153,7 +153,7 @@ export default function ResultsView({ fileName, stats, result, generated, onToas
       {/* ---------- SENTIMENT ---------- */}
       {generated.sentiment && sentiment && (
         <motion.article {...blockAnim(i++)} className="flex gap-3">
-          <DocentAvatar />
+          <DocLenseAvatar />
           <div className="min-w-0 flex-1 rounded-3xl rounded-tl-lg border border-moss/20 bg-cream p-5 shadow-sm dark:border-white/10 dark:bg-panel-dark">
             <BlockHeader icon={Gauge} label="Sentiment" accent="bg-[#e7e3f7] text-[#5246b0] dark:bg-[#8f83ff]/15 dark:text-[#b3a8ff]" onCopy={() => copy('sentiment', `${sentiment.label} (${sentiment.score >= 0 ? '+' : ''}${sentiment.score}, ${sentiment.confidence}% confidence) — ${sentiment.summary}`)} copied={copiedKey === 'sentiment'} />
             <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-4">

@@ -1,4 +1,4 @@
-# Docent · Document Analysis Studio
+# DocLense · Document Analysis Studio
 
 > Fast, chat-style document intelligence powered by Groq LPUs. Drop in any PDF or text file and get instant summaries, key takeaways, topical keywords, sentiment analysis, document statistics, a self-scoring comprehension quiz, and grounded Q&A.
 

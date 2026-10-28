@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 export type Theme = 'light' | 'dark'
 
-const KEY = 'docent.theme'
+const KEY = 'doclense.theme'
 
 function initialTheme(): Theme {
   try {

@@ -6,7 +6,7 @@ import {
   FileText, ShieldCheck, Keyboard, Zap, Timer, BadgeCheck, Quote, Star, BookOpenCheck,
 } from 'lucide-react'
 import MarketingNav from '../components/MarketingNav'
-import DocentLogo from '../components/DocentLogo'
+import DocLenseLogo from '../components/DocLenseLogo'
 
 const fadeUp = {
   initial: { opacity: 0, y: 28 },
@@ -30,7 +30,7 @@ export default function Home() {
 
       {/* ============ HERO ============ */}
       <section className="relative overflow-hidden">
-        <img src="/images/docent-nook-dark.png" alt="" aria-hidden className="pointer-events-none absolute inset-y-0 right-0 h-full w-full object-cover opacity-[0.16] dark:opacity-45 md:w-[62%]" style={{ maskImage: 'linear-gradient(to left, black 40%, transparent 100%)', WebkitMaskImage: 'linear-gradient(to left, black 40%, transparent 100%)' }} />
+        <img src="/images/doclense-nook-dark.png" alt="" aria-hidden className="pointer-events-none absolute inset-y-0 right-0 h-full w-full object-cover opacity-[0.16] dark:opacity-45 md:w-[62%]" style={{ maskImage: 'linear-gradient(to left, black 40%, transparent 100%)', WebkitMaskImage: 'linear-gradient(to left, black 40%, transparent 100%)' }} />
         <div className="pointer-events-none absolute -left-40 top-24 h-96 w-96 rounded-full bg-moss-mist/70 blur-3xl dark:bg-moss/10" />
 
         <div className="relative mx-auto grid max-w-7xl items-center gap-10 px-4 pb-16 pt-12 sm:px-6 md:grid-cols-12 md:pb-24 md:pt-20">
@@ -44,7 +44,7 @@ export default function Home() {
               Upload a document.<br />
               Meet{' '}
               <span className="relative inline-block text-moss dark:text-persimmon-dark">
-                Docent.
+                DocLense.
                 <svg className="absolute -bottom-2 left-0 w-full" viewBox="0 0 220 14" fill="none" aria-hidden><path d="M4 10.5C60 4 150 3.5 216 9" stroke="#e8572a" strokeWidth="5.5" strokeLinecap="round" opacity="0.85"/></svg>
               </span>
             </motion.h1>
@@ -74,7 +74,7 @@ export default function Home() {
           {/* floating preview collage */}
           <div className="relative mx-auto hidden h-[430px] w-full max-w-md md:col-span-5 md:block" aria-hidden>
             <motion.img
-              src="/images/docent-hero.png"
+              src="/images/doclense-hero.png"
               alt=""
               className="absolute right-2 top-2 w-64 drop-shadow-2xl lg:w-72"
               animate={{ y: [0, -14, 0] }}
@@ -126,7 +126,7 @@ export default function Home() {
         <div className="max-w-2xl">
           <p className="font-sans text-xs font-extrabold uppercase tracking-[0.2em] text-persimmon dark:text-persimmon-dark">Everything, one upload</p>
           <h2 className="mt-3 font-display text-3xl font-extrabold tracking-tight text-ink dark:text-text-dark sm:text-5xl">Six superpowers, <span className="font-serif italic text-moss dark:text-gold-dark">zero busywork.</span></h2>
-          <p className="mt-4 font-body text-lg text-ink-soft dark:text-text-dark-soft">Pick exactly what you want — summary, takeaways, quiz and more — with checkboxes after upload. Docent only generates what you tick.</p>
+          <p className="mt-4 font-body text-lg text-ink-soft dark:text-text-dark-soft">Pick exactly what you want — summary, takeaways, quiz and more — with checkboxes after upload. DocLense only generates what you tick.</p>
         </div>
         <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[
@@ -193,7 +193,7 @@ export default function Home() {
       {/* ============ TESTIMONIAL ============ */}
       <section className="mx-auto max-w-4xl px-4 pb-8 text-center sm:px-6">
         <Quote size={34} className="mx-auto text-persimmon/70 dark:text-persimmon-dark/70" fill="currentColor" />
-        <p className="mt-5 font-serif text-2xl font-medium italic leading-snug text-ink dark:text-text-dark sm:text-3xl">“I fed Docent a 60-page grant proposal on a Tuesday night. By Wednesday morning I had the argument, the risks, and the quiz I needed to brief my board — all before my coffee cooled.”</p>
+        <p className="mt-5 font-serif text-2xl font-medium italic leading-snug text-ink dark:text-text-dark sm:text-3xl">“I fed DocLense a 60-page grant proposal on a Tuesday night. By Wednesday morning I had the argument, the risks, and the quiz I needed to brief my board — all before my coffee cooled.”</p>
         <div className="mt-6 flex items-center justify-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-full bg-moss font-display text-sm font-bold text-cream dark:bg-persimmon-dark dark:text-[#2b1206]">MK</div>
           <div className="text-left"><p className="font-sans text-sm font-bold text-ink dark:text-text-dark">Maya Krishnamurthy</p><p className="text-xs text-ink-soft dark:text-text-dark-soft">Head of Programs · Lumen Foundation</p></div>
@@ -216,13 +216,13 @@ export default function Home() {
       {/* ============ FOOTER ============ */}
       <footer className="border-t border-moss/15 bg-paper-deep/70 dark:border-white/10 dark:bg-panel-dark">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-5 px-4 py-8 sm:px-6 md:flex-row">
-          <div className="flex items-center gap-2.5"><DocentLogo size={30} /><span className="font-display font-bold text-ink dark:text-text-dark">Docent</span><span className="text-xs text-ink-soft dark:text-text-dark-soft">— your patient reading companion</span></div>
+          <div className="flex items-center gap-2.5"><DocLenseLogo size={30} /><span className="font-display font-bold text-ink dark:text-text-dark">DocLense</span><span className="text-xs text-ink-soft dark:text-text-dark-soft">— your patient reading companion</span></div>
           <nav className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm font-semibold text-ink-soft dark:text-text-dark-soft">
             <Link to="/app" className="hover:text-moss dark:hover:text-persimmon-dark">Studio</Link>
             <Link to="/docs" className="hover:text-moss dark:hover:text-persimmon-dark">Docs</Link>
             <a href="https://console.groq.com" target="_blank" rel="noreferrer" className="hover:text-moss dark:hover:text-persimmon-dark">Get a Groq key</a>
           </nav>
-          <p className="text-xs text-ink-soft/80 dark:text-text-dark-soft/70">© 2026 Docent. Built with pdf.js, React and Groq.</p>
+          <p className="text-xs text-ink-soft/80 dark:text-text-dark-soft/70">© 2026 DocLense. Built with pdf.js, React and Groq.</p>
         </div>
       </footer>
     </div>

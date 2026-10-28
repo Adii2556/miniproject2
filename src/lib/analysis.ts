@@ -15,7 +15,7 @@ export const NOTHING_GENERATED: GeneratedMap = { summary: false, keyPoints: fals
 export function buildDownloadText(fileName: string, result: Partial<AnalysisResult>, stats: DocStats, generated: GeneratedMap): string {
   const line = '─'.repeat(64)
   const parts: string[] = []
-  parts.push('DOCENT — Document Analysis Report')
+  parts.push('DocLense — Document Analysis Report')
   parts.push(`Source file: ${fileName}`)
   parts.push(`Generated:   ${new Date().toLocaleString()}`)
   parts.push(line)
@@ -81,7 +81,7 @@ export function buildDownloadText(fileName: string, result: Partial<AnalysisResu
   parts.push(`Vocabulary diversity: ${(stats.lexiconDiversity * 100).toFixed(0)}%`)
   parts.push(`Reading time:         ~${stats.readingTimeLabel} (at 225 wpm)`)
   parts.push('')
-  parts.push('Analyzed with Docent · powered by Groq — console.groq.com')
+  parts.push('Analyzed with DocLense · powered by Groq — console.groq.com')
   return parts.join('\n')
 }
 
@@ -91,7 +91,7 @@ export function downloadTextFile(fileName: string, content: string) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `${base}-docent-analysis.txt`
+  a.download = `${base}-doclense-analysis.txt`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)

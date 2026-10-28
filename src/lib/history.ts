@@ -11,7 +11,7 @@ export interface HistoryEntry {
   text: string
 }
 
-const KEY = 'docent.history.v1'
+const KEY = 'doclense.history.v1'
 const MAX_ENTRIES = 6
 const MAX_TEXT = 30000
 

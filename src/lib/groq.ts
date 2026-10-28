@@ -76,7 +76,7 @@ function buildSystemPrompt(s: AnalysisSettings): string {
         ? 'Use precise, scholarly language with domain terminology.'
         : 'Use clear professional language suited to coworkers.'
   return [
-    'You are Docent, a meticulous document-analysis assistant.',
+    'You are DocLense, a meticulous document-analysis assistant.',
     `Write in ${s.language}. ${levelHint} ${styleHint}`,
     'Respond ONLY with a single valid JSON object — no markdown fences, no commentary before or after.',
     'The JSON object must have exactly this shape:',
@@ -273,7 +273,7 @@ export async function askGroq(apiKey: string, settings: AnalysisSettings, docTex
     throw new FriendlyError('Your Groq API key is missing. Add it in the sidebar before asking questions.', 'NO_KEY')
   }
   const system = [
-    'You are Docent, a warm, precise document assistant.',
+    'You are DocLense, a warm, precise document assistant.',
     `The user has uploaded a document. Answer strictly from it; if the answer is not in the document, say so briefly instead of inventing. Reply in ${settings.language}, in short paragraphs with occasional "- " bullet lines. Keep answers under 180 words.`,
     '--- DOCUMENT START ---',
     truncateDoc(docText),

@@ -98,7 +98,7 @@ body {
 }
 
 /* ---- range input styling ---- */
-input[type='range'].docent-range {
+input[type='range'].doclense-range {
   -webkit-appearance: none;
   appearance: none;
   height: 6px;
@@ -107,7 +107,7 @@ input[type='range'].docent-range {
   outline: none;
   cursor: pointer;
 }
-input[type='range'].docent-range::-webkit-slider-thumb {
+input[type='range'].doclense-range::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 18px; height: 18px; border-radius: 99px;
@@ -116,8 +116,8 @@ input[type='range'].docent-range::-webkit-slider-thumb {
   box-shadow: 0 1px 4px rgba(0,0,0,0.25);
   transition: transform .15s ease;
 }
-input[type='range'].docent-range::-webkit-slider-thumb:hover { transform: scale(1.2); }
-input[type='range'].docent-range::-moz-range-thumb {
+input[type='range'].doclense-range::-webkit-slider-thumb:hover { transform: scale(1.2); }
+input[type='range'].doclense-range::-moz-range-thumb {
   width: 18px; height: 18px; border-radius: 99px;
   background: var(--color-cream);
   border: 2.5px solid var(--color-persimmon);

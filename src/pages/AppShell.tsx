@@ -9,7 +9,7 @@ import {
 import Sidebar from '../components/Sidebar'
 import ResultsView, { StatsGrid, GeneratedStamp } from '../components/ResultsView'
 import QuizCard from '../components/QuizCard'
-import DocentLogo from '../components/DocentLogo'
+import DocLenseLogo from '../components/DocLenseLogo'
 import { useTheme } from '../lib/useTheme'
 import { extractPdf } from '../lib/pdfExtract'
 import { computeStats, extractKeywords, highlightMatches, type DocStats } from '../lib/stats'
@@ -21,9 +21,9 @@ import { SAMPLE_DOCS } from '../lib/samples'
 import { loadHistory, saveHistoryEntry, clearHistory, type HistoryEntry } from '../lib/history'
 import { buildDownloadText, downloadTextFile, type GeneratedMap } from '../lib/analysis'
 
-const LS_KEY = 'docent.groq-key'
-const LS_KEY_SAVED = 'docent.groq-key-saved'
-const LS_SETTINGS = 'docent.settings.v1'
+const LS_KEY = 'doclense.groq-key'
+const LS_KEY_SAVED = 'doclense.groq-key-saved'
+const LS_SETTINGS = 'doclense.settings.v1'
 const MAX_FILE_MB = 15
 const CHAT_LIMIT = 2000
 
@@ -199,7 +199,7 @@ export default function AppShell() {
     const ext = file.name.toLowerCase().split('.').pop() ?? ''
     const kind: 'PDF' | 'TEXT' = ext === 'pdf' ? 'PDF' : 'TEXT'
     if (!['pdf', 'txt', 'md', 'text'].includes(ext)) {
-      setUploadError({ title: `Unsupported file type “.${ext}”`, detail: 'Docent reads PDF and plain-text files only. If you have a Word document or a scan, export it to PDF first (File → Export), then drop it back in.' })
+      setUploadError({ title: `Unsupported file type “.${ext}”`, detail: 'DocLense reads PDF and plain-text files only. If you have a Word document or a scan, export it to PDF first (File → Export), then drop it back in.' })
       return
     }
     if (file.size === 0) {
@@ -207,7 +207,7 @@ export default function AppShell() {
       return
     }
     if (file.size > MAX_FILE_MB * 1024 * 1024) {
-      setUploadError({ title: 'File is too large', detail: `This file is ${(file.size / (1024 * 1024)).toFixed(1)} MB. Docent handles up to ${MAX_FILE_MB} MB — try a shorter document or trim the PDF.` })
+      setUploadError({ title: 'File is too large', detail: `This file is ${(file.size / (1024 * 1024)).toFixed(1)} MB. DocLense handles up to ${MAX_FILE_MB} MB — try a shorter document or trim the PDF.` })
       return
     }
 
@@ -217,7 +217,7 @@ export default function AppShell() {
         const buffer = await file.arrayBuffer()
         const { text, pageCount, firstPageDataUrl } = await extractPdf(buffer)
         if (text.replace(/\s/g, '').length < 30) {
-          setUploadError({ title: 'No readable text in this PDF', detail: pageCount > 0 ? `Found ${pageCount} page${pageCount > 1 ? 's' : ''}, but every page appears to be a scanned image. Docent works on text-based PDFs — run the file through OCR (e.g. Adobe Acrobat → “Recognize Text”) first.` : 'The PDF could not be read at all.', })
+          setUploadError({ title: 'No readable text in this PDF', detail: pageCount > 0 ? `Found ${pageCount} page${pageCount > 1 ? 's' : ''}, but every page appears to be a scanned image. DocLense works on text-based PDFs — run the file through OCR (e.g. Adobe Acrobat → “Recognize Text”) first.` : 'The PDF could not be read at all.', })
           return
         }
         ingestText(text, file.name, kind, file.size, pageCount, firstPageDataUrl)
@@ -408,7 +408,7 @@ export default function AppShell() {
               <Menu size={19} />
             </button>
             <nav className="flex min-w-0 items-center gap-1.5 text-[12px] font-semibold text-ink-soft dark:text-text-dark-soft" aria-label="Breadcrumb">
-              <Link to="/" className="hidden transition hover:text-moss-deep dark:hover:text-text-dark sm:inline">Docent</Link>
+              <Link to="/" className="hidden transition hover:text-moss-deep dark:hover:text-text-dark sm:inline">DocLense</Link>
               <ChevronRight size={12} className="hidden sm:inline" />
               <span className="truncate text-moss-deep dark:text-gold-dark">Analysis Studio</span>
               {uploaded && <><ChevronRight size={12} /><span className="max-w-[140px] truncate font-normal text-ink dark:text-text-dark-soft">{uploaded.fileName}</span></>}
@@ -561,7 +561,7 @@ export default function AppShell() {
                   {/* ---- what to generate: checkbox grid ---- */}
                   <div className="border-t border-moss/15 bg-paper-deep/50 p-4 dark:border-white/10 dark:bg-black/15 sm:p-5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="font-sans text-[11px] font-extrabold uppercase tracking-[0.2em] text-ink dark:text-text-dark">What should Docent generate?</p>
+                      <p className="font-sans text-[11px] font-extrabold uppercase tracking-[0.2em] text-ink dark:text-text-dark">What should DocLense generate?</p>
                       <div className="flex items-center gap-1.5">
                         <button onClick={() => setSections({ summary: true, keyPoints: true, keywords: true, sentiment: true, quiz: true })} className="rounded-lg px-2 py-1 text-[10.5px] font-bold uppercase tracking-wide text-moss-deep transition hover:bg-moss-mist dark:text-gold-dark dark:hover:bg-white/5">Select all</button>
                         <span className="text-ink-soft/50 dark:text-white/20">·</span>
@@ -631,9 +631,9 @@ export default function AppShell() {
                 <section className="overflow-hidden rounded-3xl border border-moss/25 bg-cream shadow-sm dark:border-white/10 dark:bg-panel-dark">
                   <div className="flex items-center justify-between gap-2 border-b border-moss/15 px-4 py-3 dark:border-white/10 sm:px-5">
                     <div className="flex items-center gap-2">
-                      <DocentLogo size={26} />
+                      <DocLenseLogo size={26} />
                       <div>
-                        <p className="font-display text-[13.5px] font-extrabold leading-none text-ink dark:text-text-dark">Ask Docent</p>
+                        <p className="font-display text-[13.5px] font-extrabold leading-none text-ink dark:text-text-dark">Ask DocLense</p>
                         <p className="mt-0.5 text-[9.5px] font-semibold uppercase tracking-widest text-ink-soft/80 dark:text-text-dark-soft/70">Grounded in this document</p>
                       </div>
                     </div>
@@ -646,7 +646,7 @@ export default function AppShell() {
                     {messages.length === 0 ? (
                       <div className="py-2 text-center">
                         <BookOpenText size={30} strokeWidth={1.6} className="mx-auto text-moss/60 dark:text-persimmon-dark/70" />
-                        <p className="mt-2 font-body text-[14px] italic text-ink-soft dark:text-text-dark-soft">Questions about this document? Go ahead — Docent has read it.</p>
+                        <p className="mt-2 font-body text-[14px] italic text-ink-soft dark:text-text-dark-soft">Questions about this document? Go ahead — DocLense has read it.</p>
                         <div className="mt-3 flex flex-wrap justify-center gap-1.5">
                           {SUGGESTIONS.map(s => (
                             <button key={s} onClick={() => askQuestion(s)} className="rounded-full border border-moss/25 bg-moss-mist/60 px-3 py-1.5 text-[11px] font-semibold text-moss-deep transition hover:border-moss hover:bg-moss-mist dark:border-white/12 dark:bg-white/5 dark:text-text-dark-soft dark:hover:border-persimmon-dark/40 dark:hover:text-gold-dark">{s}</button>
@@ -656,15 +656,15 @@ export default function AppShell() {
                     ) : (
                       messages.map(m => (
                         <div key={m.id} className={`flex gap-2 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                          {m.role === 'assistant' && <DocentLogo size={26} className="mt-1 shrink-0" />}
+                          {m.role === 'assistant' && <DocLenseLogo size={26} className="mt-1 shrink-0" />}
                           <div className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 font-body text-[14px] leading-relaxed shadow-sm sm:max-w-[78%] ${m.role === 'user' ? 'rounded-tr-md bg-moss text-cream dark:bg-persimmon-dark dark:text-[#2b1206]' : m.isError ? 'rounded-tl-md border border-persimmon/45 bg-persimmon-mist text-[#8a2c0d] dark:border-persimmon-dark/40 dark:bg-persimmon-dark/10 dark:text-persimmon-dark' : 'rounded-tl-md border border-moss/20 bg-paper text-ink dark:border-white/10 dark:bg-panel-dark-2 dark:text-text-dark/95'}`}>{m.content}</div>
                         </div>
                       ))
                     )}
                     {askLoading && (
                       <div className="flex gap-2">
-                        <DocentLogo size={26} className="mt-1 shrink-0" />
-                        <div className="flex items-center gap-1.5 rounded-2xl rounded-tl-md border border-moss/20 bg-paper px-4 py-3 dark:border-white/10 dark:bg-panel-dark-2" aria-label="Docent is thinking">
+                        <DocLenseLogo size={26} className="mt-1 shrink-0" />
+                        <div className="flex items-center gap-1.5 rounded-2xl rounded-tl-md border border-moss/20 bg-paper px-4 py-3 dark:border-white/10 dark:bg-panel-dark-2" aria-label="DocLense is thinking">
                           {[0, 1, 2].map(i => <span key={i} className="h-2 w-2 animate-bounce rounded-full bg-moss/70 dark:bg-persimmon-dark" style={{ animationDelay: `${i * 0.16}s` }} />)}
                         </div>
                       </div>

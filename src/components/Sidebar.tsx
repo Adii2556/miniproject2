@@ -4,7 +4,7 @@ import {
   Languages, GraduationCap, RotateCcw, History, Trash2, FileText, X, CheckCircle2, Zap,
 } from 'lucide-react'
 import { GROQ_MODELS, type AnalysisSettings } from '../lib/groq'
-import DocentLogo from './DocentLogo'
+import DocLenseLogo from './DocLenseLogo'
 import type { HistoryEntry } from '../lib/history'
 
 interface SidebarProps {
@@ -76,9 +76,9 @@ export default function Sidebar(props: SidebarProps) {
         {/* header */}
         <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
           <div className="flex items-center gap-2.5">
-            <DocentLogo size={32} />
+            <DocLenseLogo size={32} />
             <div>
-              <p className="font-display text-lg font-bold leading-none text-text-dark">Docent</p>
+              <p className="font-display text-lg font-bold leading-none text-text-dark">DocLense</p>
               <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-text-dark-soft/80">Analysis Studio</p>
             </div>
           </div>
@@ -165,7 +165,7 @@ export default function Sidebar(props: SidebarProps) {
               type="range" min={0} max={1.2} step={0.05} value={settings.temperature} disabled={disabled}
               onChange={e => updateSettings({ temperature: Number(e.target.value) })}
               aria-label="Temperature"
-              className="docent-range w-full"
+              className="doclense-range w-full"
               style={{ ['--fill' as string]: `${tempPct}%` }}
             />
             <div className="flex items-center justify-between px-1 text-[10px] font-semibold text-text-dark-soft/75">
@@ -185,7 +185,7 @@ export default function Sidebar(props: SidebarProps) {
               type="range" min={256} max={4096} step={128} value={settings.maxTokens} disabled={disabled}
               onChange={e => updateSettings({ maxTokens: Number(e.target.value) })}
               aria-label="Max tokens"
-              className="docent-range w-full"
+              className="doclense-range w-full"
               style={{ ['--fill' as string]: `${tokensPct}%` }}
             />
             <div className="flex items-center justify-between px-1 text-[10px] font-semibold text-text-dark-soft/75"><span>256</span><span>2,048</span><span>4,096</span></div>

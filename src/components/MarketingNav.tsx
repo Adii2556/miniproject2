@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Menu, Moon, Sun, ArrowRight, X } from 'lucide-react'
-import DocentLogo from './DocentLogo'
+import DocLenseLogo from './DocLenseLogo'
 import { useTheme } from '../lib/useTheme'
 
 const LINKS = [
@@ -33,9 +33,9 @@ export default function MarketingNav() {
   return (
     <header className="sticky top-0 z-50 border-b border-[#175e541f] bg-paper/85 backdrop-blur-xl dark:border-white/10 dark:bg-moss-night-deep/80">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6">
-        <Link to="/" className="flex items-center gap-2.5" aria-label="Docent home">
-          <DocentLogo size={36} />
-          <span className="font-display text-[1.45rem] font-bold tracking-tight text-ink dark:text-text-dark">Docent</span>
+        <Link to="/" className="flex items-center gap-2.5" aria-label="DocLense home">
+          <DocLenseLogo size={36} />
+          <span className="font-display text-[1.45rem] font-bold tracking-tight text-ink dark:text-text-dark">DocLense</span>
           <span className="mt-1 hidden rounded-full border border-persimmon/40 bg-persimmon-mist px-2 py-0.5 font-sans text-[10px] font-bold uppercase tracking-widest text-persimmon dark:border-persimmon-dark/40 dark:bg-persimmon-dark/10 dark:text-persimmon-dark sm:inline-block">Groq-powered</span>
         </Link>
 
