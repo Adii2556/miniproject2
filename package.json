@@ -8,7 +8,10 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check:security": "node scripts/security-check.mjs",
+    "audit:prod": "npm audit --omit=dev",
+    "check": "npm run lint && npm run test && npm run build && npm run check:security"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.1",
@@ -18,7 +21,8 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.18.5",
-    "tailwindcss": "^4.2.1"
+    "tailwindcss": "^4.2.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
@@ -42,5 +46,8 @@
     "eslint-plugin-react-hooks": {
       "zod": "^4.6.6"
     }
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }

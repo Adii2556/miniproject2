@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import {
   Eye, EyeOff, ChevronDown, KeyRound, ExternalLink, Cpu, Flame, Rows3, AlignLeft,
   Languages, GraduationCap, RotateCcw, History, Trash2, FileText, X, CheckCircle2, Zap,
+  Layers, HelpCircle,
 } from 'lucide-react'
 import { GROQ_MODELS, SUPPORTED_LANGUAGES, type AnalysisSettings } from '../lib/groq'
 import DocLenseLogo from './DocLenseLogo'
@@ -70,7 +71,7 @@ export default function Sidebar(props: SidebarProps) {
             <DocLenseLogo size={32} />
             <div>
               <p className="font-display text-lg font-bold leading-none text-text-dark">DocLense</p>
-              <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-text-dark-soft/80">Analysis Studio</p>
+              <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-text-dark-soft/80">Intelligence Studio</p>
             </div>
           </div>
           <button onClick={onClose} className="rounded-xl p-2 text-text-dark-soft transition hover:bg-white/5 hover:text-text-dark lg:hidden" aria-label="Close settings">
@@ -79,7 +80,7 @@ export default function Sidebar(props: SidebarProps) {
         </div>
 
         {/* scrollable body */}
-        <div className="flex-1 space-y-6 overflow-y-auto px-5 py-5">
+        <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
 
           {/* ---------- API KEY ---------- */}
           <section className="space-y-3">
@@ -108,14 +109,48 @@ export default function Sidebar(props: SidebarProps) {
                 </button>
               </div>
               <div className="mt-2.5 flex items-start justify-between gap-3">
-                <p className="max-w-[185px] text-[10.5px] font-medium leading-relaxed text-text-dark-soft">Kept in memory only. Reloading or closing this tab clears it.</p>
+                <p className="max-w-[185px] text-[10.5px] font-medium leading-relaxed text-text-dark-soft">Ephemeral: Kept strictly in tab memory. Never stored or logged.</p>
                 <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-bold text-gold-dark underline-offset-2 transition hover:text-gold hover:underline">Get a free key<ExternalLink size={10} /></a>
               </div>
             </div>
           </section>
 
+          {/* ---------- COVERAGE MODE (BEYOND MINIPROJECT1) ---------- */}
+          <section className="space-y-2">
+            <SectionLabel><Layers size={11} className="-ml-4 mr-0.5 inline" />Document Coverage</SectionLabel>
+            <div className="grid grid-cols-2 gap-1.5 rounded-2xl border border-white/10 bg-black/25 p-1.5" role="radiogroup" aria-label="Coverage mode">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={settings.coverageMode !== 'complete'}
+                disabled={disabled}
+                onClick={() => updateSettings({ coverageMode: 'sampled' })}
+                className={`rounded-xl px-2 py-2 text-center transition ${settings.coverageMode !== 'complete' ? 'bg-persimmon-dark text-[#2b1206] shadow font-bold' : 'text-text-dark-soft hover:bg-white/5 hover:text-text-dark'}`}
+              >
+                <span className="block text-xs">Fast Sampled</span>
+                <span className="block text-[9.5px] opacity-80">6 key sections</span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={settings.coverageMode === 'complete'}
+                disabled={disabled}
+                onClick={() => updateSettings({ coverageMode: 'complete' })}
+                className={`rounded-xl px-2 py-2 text-center transition ${settings.coverageMode === 'complete' ? 'bg-persimmon-dark text-[#2b1206] shadow font-bold' : 'text-text-dark-soft hover:bg-white/5 hover:text-text-dark'}`}
+              >
+                <span className="block text-xs">Complete (100%)</span>
+                <span className="block text-[9.5px] opacity-80">All sections</span>
+              </button>
+            </div>
+            <p className="px-1 text-[10.5px] font-medium text-text-dark-soft/75">
+              {settings.coverageMode === 'complete'
+                ? 'Full coverage processes all document sections via parallel map-reduce synthesis.'
+                : 'Fast mode samples key representative sections for speedy evaluation.'}
+            </p>
+          </section>
+
           {/* ---------- MODEL ---------- */}
-          <section className="space-y-2.5">
+          <section className="space-y-2">
             <SectionLabel>Model</SectionLabel>
             <div className="relative">
               <Cpu size={15} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-persimmon-dark" />
@@ -147,9 +182,9 @@ export default function Sidebar(props: SidebarProps) {
               style={{ ['--fill' as string]: `${tempPct}%` }}
             />
             <div className="flex items-center justify-between px-1 text-[10px] font-semibold text-text-dark-soft/75">
-              <span>0.0 · Precise</span>
+              <span>0.0 · Strict Evidence</span>
               <span className="italic text-gold-dark/90">{tempHint}</span>
-              <span>1.2 · Wild</span>
+              <span>1.2 · Creative</span>
             </div>
           </section>
 
@@ -183,6 +218,25 @@ export default function Sidebar(props: SidebarProps) {
                   className={`rounded-xl px-2 py-2 text-[11.5px] font-bold transition ${settings.summaryStyle === value ? 'bg-persimmon-dark text-[#2b1206] shadow' : 'text-text-dark-soft hover:bg-white/5 hover:text-text-dark'}`}
                 >
                   {label}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {/* ---------- QUIZ DIFFICULTY ---------- */}
+          <section className="space-y-2">
+            <SectionLabel><HelpCircle size={11} className="-ml-4 mr-0.5 inline" />Quiz Difficulty</SectionLabel>
+            <div className="grid grid-cols-3 gap-1.5 rounded-2xl border border-white/10 bg-black/25 p-1.5" role="radiogroup" aria-label="Quiz difficulty">
+              {(['easy', 'medium', 'hard'] as const).map(diff => (
+                <button
+                  key={diff}
+                  role="radio"
+                  aria-checked={settings.quizDifficulty === diff}
+                  disabled={disabled}
+                  onClick={() => updateSettings({ quizDifficulty: diff })}
+                  className={`rounded-xl px-2 py-1.5 text-xs font-bold capitalize transition ${settings.quizDifficulty === diff ? 'bg-persimmon-dark text-[#2b1206] shadow' : 'text-text-dark-soft hover:bg-white/5 hover:text-text-dark'}`}
+                >
+                  {diff}
                 </button>
               ))}
             </div>
@@ -231,7 +285,7 @@ export default function Sidebar(props: SidebarProps) {
           {/* ---------- RECENT ANALYSES ---------- */}
           <section className="space-y-2.5 border-t border-white/10 pt-5">
             <div className="flex items-center justify-between px-1">
-              <SectionLabel><History size={11} className="-ml-4 mr-0.5 inline" />This tab's analyses</SectionLabel>
+              <SectionLabel><History size={11} className="-ml-4 mr-0.5 inline" />This session's analyses</SectionLabel>
               {history.length > 0 && (
                 <button onClick={onClearHistory} className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-text-dark-soft/70 transition hover:text-[#ffb3a0]"><Trash2 size={11} />Clear</button>
               )}

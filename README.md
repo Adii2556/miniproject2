@@ -1,65 +1,109 @@
-# DocLense · Document Analysis Studio
+# DocLense · Enterprise Document Intelligence Platform
 
-> Fast, chat-style document intelligence powered by Groq LPUs. Drop in any PDF or text file and get instant summaries, key takeaways, topical keywords, sentiment analysis, document statistics, a self-scoring comprehension quiz, and grounded Q&A.
+> Advanced, evidence-grounded document intelligence platform powered by Groq LPUs. Drop in single or multiple PDFs, text, or Markdown files and receive instant verifiable summaries, citation-backed takeaways, topical keywords, sentiment analysis, local document statistics, scored comprehension quizzes, and BM25-retrieved grounded Q&A.
 
 ---
 
-## ✨ Features
+## ✨ Features & Capabilities
 
-- **Client-Side Document Parsing**: Decode PDFs directly in your browser using `pdfjs-dist` Web Workers, alongside support for `.txt`, `.md`, and `.text` files up to 15 MB.
-- **Customizable Generation**: Select exactly what to generate before running analysis:
-  - **Summary**: Choose between *Concise*, *Executive*, or *Detailed* briefs.
-  - **Key Points**: 5 to 7 crisp takeaways and central arguments.
-  - **Keywords**: 8 to 12 topical tags for rapid scanning with in-reader highlighting.
-  - **Sentiment Analysis**: Polarity gauge ($-100$ to $+100$), confidence score, and tone tags.
-  - **Comprehension Quiz**: Self-scoring 10-question multiple-choice test with instant scoring and explanations.
-- **Document Statistics & Readability**: In-depth statistics including word count, character count, sentence count, paragraph count, estimated reading time at 225 wpm, and lexicon diversity.
-- **Grounded Q&A Chat**: Ask follow-up questions about the document in an interactive chat feed with quick-prompt suggestions.
-- **Export**: One-click download of the complete analysis report as a `.txt` file.
-- **Modern UI & Themes**: Tactile aesthetic with paper grain textures, dark/light theme switching, and custom typography (Bricolage Grotesque + Fraunces + Inter + JetBrains Mono).
+### 1. Verifiable Citations & Source Evidence
+- **Verbatim Excerpt Matching**: Summaries, key findings, and Q&A responses are verified against exact source blocks. Unsupported claims are caught and omitted.
+- **Interactive Citation Chips**: Click any source citation (e.g. `[Page 2]` or `[Contract.pdf: Page 4]`) to open the built-in reader and smoothly scroll directly to the highlighted evidence.
+
+### 2. Multi-Document Intelligence
+- **Multi-File Workspace**: Upload multiple documents into a single active session with live tabs.
+- **Cross-Document Q&A**: Ask questions that compare, contrast, and pull facts across multiple documents simultaneously, with clear citation provenance indicating which document and page supplied the evidence.
+
+### 3. Configurable Document Coverage Modes
+- **Complete Mode (100% Coverage)**: Synthesizes entire lengthy documents through parallel map-reduce batches with verified claim digestion.
+- **Fast Sampled Mode**: Rapid evaluation sampling representative sections across beginning, middle, and end.
+- **Coverage Transparency**: Real-time coverage badges disclose the exact percentage of text and chunks evaluated.
+
+### 4. Scanned PDF Support & Bounded Vision OCR
+- **Image PDF Detection**: Automatically identifies scanned PDFs with zero extractable text layer.
+- **Bounded Vision OCR**: Transcribes scanned document pages into verified source blocks using Groq's Vision models with rate-limit bounding (up to 5 pages), memory protection, and transparent accuracy notes.
+
+### 5. Intelligent BM25 Retrieval for Q&A
+- **Lexical BM25 Ranking**: Uses term frequency, document frequency dampening, query term weighting, and phrase boosting rather than naive text truncation.
+- **Adjacent Context Cohesion**: Automatically includes adjacent passages for continuous narrative flow and accurate context.
+
+### 6. Full-Text Document Reader
+- **In-Reader Search**: Live text search with match highlights.
+- **Keyword & Citation Highlighting**: Toggleable gold keyword highlights and green verified evidence highlights.
+- **One-Click Section Copy**: Effortlessly copy individual source paragraphs or pages.
+
+### 7. Multi-Format Professional Exports
+- **Plain Text (.txt)**: Clean structured analysis report with numeric `[1]` citation markers and reference tables.
+- **Markdown (.md)**: Fully formatted Markdown with headers, blockquotes, metric tables, and academic footnotes.
+- **Print / PDF**: Instant print preview with `@media print` styling for clean, professional PDF report generation.
+
+---
+
+## 🔒 Security Architecture
+
+DocLense implements an exhaustive defense-in-depth model:
+- **Bring-Your-Own-Key (BYOK) Ephemeral Memory**: Groq API keys reside strictly in memory for the active tab session. Keys are never written to `localStorage`, `sessionStorage`, cookies, or remote analytics.
+- **Prompt Injection Boundaries**: Source document content is strictly marked as untrusted quoted data with JSON demarcation and system override defenses.
+- **Strict Content Security Policy (CSP)**:
+  - `script-src 'self'` (Zero `'unsafe-eval'`).
+  - `object-src 'none'`.
+  - `base-uri 'none'`.
+  - `frame-ancestors 'none'`.
+  - `connect-src 'self' https://api.groq.com`.
+- **Zero-Trust File Ingestion**: Magic byte signature verification (`%PDF-`), page bounding (max 250 pages), character limits, ReDoS-safe linear text processing, and canvas dimension limits to prevent memory exhaustion attacks.
+- **Path Traversal Defenses**: `sanitizeFileName()` strips traversal sequences (`../`, `..\`) and reserved characters.
+- **Opener & Framer Isolation**: COOP (`same-origin`), CORP (`same-origin`), X-Frame-Options (`DENY`), and HSTS (`max-age=31536000`).
 
 ---
 
 ## 🛠️ Tech Stack
 
-- **Framework**: React 19, TypeScript
-- **Bundler & Tooling**: Vite 7
+- **Framework**: React 19, TypeScript (Strict Mode)
+- **Bundler & Code Splitting**: Vite 7 with modular vendor chunks (`vendor-react`, `vendor-motion`, `vendor-pdf`, `vendor-zod`)
+- **Validation**: Zod 4 for runtime schema enforcement and bounded retry correction
 - **Styling**: Tailwind CSS v4 (`@tailwindcss/vite`)
-- **PDF Engine**: `pdfjs-dist`
-- **Animations & Icons**: Framer Motion, `lucide-react`
-- **AI Inference**: Groq Cloud REST API (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`)
+- **PDF Engine**: `pdfjs-dist` (Legacy Worker for universal browser/Node compatibility)
+- **Icons & Animation**: `lucide-react`, `framer-motion`
+- **Testing**: Vitest, Node test runner, automated security audit suite
 
 ---
 
 ## 🚀 Getting Started
 
-### 1. Clone the repository
+### 1. Clone & Install
 ```bash
 git clone https://github.com/Adii2556/miniproject2.git
 cd miniproject2
-```
-
-### 2. Install dependencies
-```bash
 npm install
 ```
 
-### 3. Add your Groq API key
-Open the Studio and paste a personal Groq API key into the sidebar. The key is held in memory only and is cleared when the tab reloads or closes. Do not put shared secrets in `VITE_*` environment variables because Vite embeds them in public browser assets.
+### 2. Run Quality Gate (Lint, Tests, Build, Security Scan)
+```bash
+npm run check
+```
 
-### 4. Run Development Server
+### 3. Run Development Server
 ```bash
 npm run dev
 ```
 
-### 5. Build for Production
+### 4. Build for Production
 ```bash
 npm run build
 ```
 
-## Security notes
+---
 
-- Production preview instrumentation and session recording are intentionally excluded.
-- Recent analyses exist only in memory for the current tab and are not persisted.
-- Uploaded documents are treated as untrusted model context, but AI output can still be incorrect. Review important results against the source.
-- Deployment headers are provided for Vercel (`vercel.json`) and `_headers`-compatible static hosts (`public/_headers`).
+## 🧪 Testing & Verification
+
+DocLense includes an automated test suite verifying security, pipeline accuracy, and error resilience:
+```bash
+# Run unit and security audit tests
+npm test
+
+# Run secret scanning regression check
+npm run check:security
+
+# Run comparative benchmark
+node scripts/benchmark-comparison.mjs
+```
