@@ -65,7 +65,7 @@ export default function QuizCard({ quiz, onToast }: QuizCardProps) {
                     const isAnswer = oi === q.answer
                     const isChosen = chosen === oi
                     let cls = 'border-moss/20 bg-paper hover:border-moss/50 hover:bg-moss-mist/50 text-ink dark:border-white/12 dark:bg-white/[0.04] dark:text-text-dark dark:hover:border-persimmon-dark/40'
-                    let badge = String.fromCharCode(65 + oi)
+                    const badge = String.fromCharCode(65 + oi)
                     if (locked) {
                       if (isAnswer) cls = 'border-moss bg-moss-mist text-moss-deep dark:border-emerald-500/60 dark:bg-emerald-500/10 dark:text-emerald-300'
                       else if (isChosen) cls = 'border-persimmon bg-persimmon-mist text-persimmon dark:border-persimmon-dark/60 dark:bg-persimmon-dark/10 dark:text-persimmon-dark'

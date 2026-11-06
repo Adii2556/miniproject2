@@ -11,18 +11,17 @@ import ResultsView, { StatsGrid, GeneratedStamp } from '../components/ResultsVie
 import QuizCard from '../components/QuizCard'
 import DocLenseLogo from '../components/DocLenseLogo'
 import { useTheme } from '../lib/useTheme'
-import { extractPdf } from '../lib/pdfExtract'
+import { FileSafetyError, validatePdfSignature, validatePlainText } from '../lib/fileSecurity'
 import { computeStats, extractKeywords, highlightMatches, type DocStats } from '../lib/stats'
 import {
-  callGroq, askGroq, FriendlyError, GROQ_MODELS,
+  callGroq, askGroq, FriendlyError, GROQ_MODELS, normalizeSettings,
   type AnalysisSettings, type AnalysisResult, type AnalysisSection,
 } from '../lib/groq'
 import { SAMPLE_DOCS } from '../lib/samples'
-import { loadHistory, saveHistoryEntry, clearHistory, type HistoryEntry } from '../lib/history'
+import { clearHistory, clearLegacySensitiveStorage, loadHistory, saveHistoryEntry, type HistoryEntry } from '../lib/history'
 import { buildDownloadText, downloadTextFile, type GeneratedMap } from '../lib/analysis'
+import { inspectDocumentSafety } from '../lib/documentSecurity'
 
-const LS_KEY = 'doclense.groq-key'
-const LS_KEY_SAVED = 'doclense.groq-key-saved'
 const LS_SETTINGS = 'doclense.settings.v1'
 const MAX_FILE_MB = 15
 const CHAT_LIMIT = 2000
@@ -47,6 +46,7 @@ interface UploadedDoc {
   text: string
   firstPageDataUrl: string | null
   stats: DocStats
+  hasInstructionLikeContent: boolean
 }
 
 interface ChatMessage {
@@ -72,7 +72,7 @@ function loadStoredSettings(): AnalysisSettings {
     const raw = localStorage.getItem(LS_SETTINGS)
     if (!raw) return DEFAULT_SETTINGS
     const parsed = JSON.parse(raw) as Partial<AnalysisSettings>
-    return { ...DEFAULT_SETTINGS, ...parsed }
+    return normalizeSettings({ ...DEFAULT_SETTINGS, ...parsed })
   } catch {
     return DEFAULT_SETTINGS
   }
@@ -85,39 +85,21 @@ const SUGGESTIONS = ['What is the main argument of this document?', 'Who is the 
 export default function AppShell() {
   const { theme, toggleTheme } = useTheme()
 
-  const envKey = (import.meta.env.VITE_GROQ_API_KEY as string | undefined) ?? ''
-  const keyFromEnv = Boolean(envKey)
-
   // ---------- sidebar / key / settings ----------
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [apiKey, setApiKey] = useState<string>(() => {
-    try { return localStorage.getItem(LS_KEY) ?? envKey } catch { return envKey }
-  })
-  const [saveKey, setSaveKey] = useState<boolean>(() => {
-    try { return localStorage.getItem(LS_KEY_SAVED) !== '0' } catch { return true }
-  })
+  const [apiKey, setApiKey] = useState('')
   const [revealKey, setRevealKey] = useState(false)
   const [settings, setSettings] = useState<AnalysisSettings>(loadStoredSettings)
 
   useEffect(() => {
-    try {
-      if (keyFromEnv) return
-      if (saveKey) localStorage.setItem(LS_KEY, apiKey)
-      else localStorage.removeItem(LS_KEY)
-      localStorage.setItem(LS_KEY_SAVED, saveKey ? '1' : '0')
-    } catch { /* storage unavailable */ }
-  }, [apiKey, saveKey, keyFromEnv])
+    clearLegacySensitiveStorage()
+  }, [])
 
   useEffect(() => {
     try { localStorage.setItem(LS_SETTINGS, JSON.stringify(settings)) } catch { /* ignore */ }
   }, [settings])
 
-  const updateSettings = useCallback((patch: Partial<AnalysisSettings>) => setSettings(s => ({ ...s, ...patch })), [])
-  const resetSettings = useCallback(() => {
-    setSettings(DEFAULT_SETTINGS)
-    pushToast('Settings reset to defaults', 'ok')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  const updateSettings = useCallback((patch: Partial<AnalysisSettings>) => setSettings(current => normalizeSettings({ ...current, ...patch })), [])
 
   const canUseGroq = apiKey.trim().length > 0
 
@@ -151,26 +133,37 @@ export default function AppShell() {
   const mainRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
-  const abortRef = useRef<AbortController | null>(null)
+  const generationAbortRef = useRef<AbortController | null>(null)
+  const fileAbortRef = useRef<AbortController | null>(null)
+  const questionAbortRef = useRef<AbortController | null>(null)
   const toastId = useRef(0)
 
-  function pushToast(message: string, tone: Toast['tone'] = 'ok') {
+  const pushToast = useCallback((message: string, tone: Toast['tone'] = 'ok') => {
     const id = ++toastId.current
     setToasts(t => [...t.slice(-2), { id, message, tone }])
     window.setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3600)
-  }
+  }, [])
+
+  const resetSettings = useCallback(() => {
+    setSettings(DEFAULT_SETTINGS)
+    pushToast('Settings reset to defaults')
+  }, [pushToast])
+
+  useEffect(() => () => {
+    generationAbortRef.current?.abort()
+    fileAbortRef.current?.abort()
+    questionAbortRef.current?.abort()
+  }, [])
 
   // ---------- stage cycling ----------
   useEffect(() => {
     if (!uploading) return
-    setUploadStage(0)
     const t = window.setInterval(() => setUploadStage(s => Math.min(s + 1, UPLOAD_STAGES.length - 1)), 750)
     return () => window.clearInterval(t)
   }, [uploading])
 
   useEffect(() => {
     if (!generating) return
-    setGenStage(0)
     const t = window.setInterval(() => setGenStage(s => Math.min(s + 1, GEN_STAGES.length - 1)), 1500)
     return () => window.clearInterval(t)
   }, [generating])
@@ -186,7 +179,8 @@ export default function AppShell() {
   const ingestText = useCallback((text: string, fileName: string, kind: 'PDF' | 'TEXT', sizeBytes: number, pageCount: number | null, firstPageDataUrl: string | null) => {
     const trimmed = text.trim()
     const stats = computeStats(trimmed)
-    setUploaded({ fileName, kind, sizeBytes, pageCount, text: trimmed, firstPageDataUrl, stats })
+    const safety = inspectDocumentSafety(trimmed)
+    setUploaded({ fileName, kind, sizeBytes, pageCount, text: trimmed, firstPageDataUrl, stats, hasInstructionLikeContent: safety.hasInstructionLikeContent })
     setResult(null)
     setShowResults(false)
     setGenError(null)
@@ -211,18 +205,24 @@ export default function AppShell() {
       return
     }
 
+    fileAbortRef.current?.abort()
+    const controller = new AbortController()
+    fileAbortRef.current = controller
+    setUploadStage(0)
     setUploading(file.name)
     try {
       if (kind === 'PDF') {
+        await validatePdfSignature(file)
         const buffer = await file.arrayBuffer()
-        const { text, pageCount, firstPageDataUrl } = await extractPdf(buffer)
+        const { extractPdf } = await import('../lib/pdfExtract')
+        const { text, pageCount, firstPageDataUrl } = await extractPdf(buffer, controller.signal)
         if (text.replace(/\s/g, '').length < 30) {
           setUploadError({ title: 'No readable text in this PDF', detail: pageCount > 0 ? `Found ${pageCount} page${pageCount > 1 ? 's' : ''}, but every page appears to be a scanned image. DocLense works on text-based PDFs — run the file through OCR (e.g. Adobe Acrobat → “Recognize Text”) first.` : 'The PDF could not be read at all.', })
           return
         }
         ingestText(text, file.name, kind, file.size, pageCount, firstPageDataUrl)
       } else {
-        const text = await file.text()
+        const text = validatePlainText(await file.text())
         if (!text.trim()) {
           setUploadError({ title: 'That file is empty', detail: 'The file opened fine, but it contains only whitespace — nothing to analyze. Paste the content into a new .txt file and try again.' })
           return
@@ -231,14 +231,21 @@ export default function AppShell() {
       }
       pushToast('Document loaded — stats computed')
     } catch (err) {
-      console.error(err)
-      setUploadError({ title: 'Could not read this file', detail: kind === 'PDF' ? 'The PDF may be corrupt, password-protected, or malformed. Try opening it in a PDF viewer, re-saving it, and dropping it again.' : 'The text file could not be decoded. Make sure it is UTF-8 encoded plain text.', })
+      const error = err instanceof Error ? err : new Error('Unknown file-processing error')
+      if (error.name === 'AbortError') return
+      if (error instanceof FileSafetyError || error.name === 'PdfSafetyError') {
+        setUploadError({ title: 'This file was stopped for safety', detail: error.message })
+      } else {
+        setUploadError({ title: 'Could not read this file', detail: kind === 'PDF' ? 'The PDF may be corrupt, password-protected, or malformed. Try opening it in a PDF viewer, re-saving it, and dropping it again.' : 'The text file could not be decoded. Make sure it is UTF-8 plain text.', })
+      }
     } finally {
-      setUploading(null)
-      if (fileInputRef.current) fileInputRef.current.value = ''
+      if (fileAbortRef.current === controller) {
+        fileAbortRef.current = null
+        setUploading(null)
+        if (fileInputRef.current) fileInputRef.current.value = ''
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ingestText])
+  }, [ingestText, pushToast])
 
   const loadSample = useCallback((id: string) => {
     const sample = SAMPLE_DOCS.find(s => s.id === id)
@@ -246,15 +253,17 @@ export default function AppShell() {
     setUploadError(null)
     ingestText(sample.text, sample.fileName, 'TEXT', new Blob([sample.text]).size, null, null)
     pushToast('Sample loaded')
-  }, [ingestText])
+  }, [ingestText, pushToast])
 
   const loadFromHistory = useCallback((entry: HistoryEntry) => {
-    ingestText(entry.text, entry.fileName, 'TEXT', new Blob([entry.text]).size, entry.pageCount, null)
+    ingestText(entry.text, entry.fileName, entry.kind, new Blob([entry.text]).size, entry.pageCount, null)
     pushToast('Loaded from your recents')
     setSidebarOpen(false)
-  }, [ingestText])
+  }, [ingestText, pushToast])
 
   const resetDocument = useCallback(() => {
+    generationAbortRef.current?.abort()
+    questionAbortRef.current?.abort()
     setUploaded(null)
     setResult(null)
     setShowResults(false)
@@ -279,12 +288,14 @@ export default function AppShell() {
       setSidebarOpen(true)
       return
     }
+    setGenStage(0)
     setGenerating(true)
     setGenError(null)
-    abortRef.current?.abort()
-    abortRef.current = new AbortController()
+    generationAbortRef.current?.abort()
+    const controller = new AbortController()
+    generationAbortRef.current = controller
     try {
-      const res = await callGroq(apiKey, settings, chosen as AnalysisSection[], uploaded.text, abortRef.current.signal)
+      const res = await callGroq(apiKey, settings, chosen as AnalysisSection[], uploaded.text, controller.signal)
       const gen: GeneratedMap = {
         summary: chosen.includes('summary'),
         keyPoints: chosen.includes('keyPoints'),
@@ -300,6 +311,7 @@ export default function AppShell() {
       window.setTimeout(() => pushToast('Analysis complete'), 150)
       setHistory(saveHistoryEntry({
         fileName: uploaded.fileName,
+        kind: uploaded.kind,
         pageCount: uploaded.pageCount,
         words: uploaded.stats.words,
         title: res.title ?? uploaded.fileName.replace(/\.[^.]+$/, ''),
@@ -313,10 +325,12 @@ export default function AppShell() {
       setGenError(message)
       pushToast(message, 'error')
     } finally {
-      setGenerating(false)
+      if (generationAbortRef.current === controller) {
+        generationAbortRef.current = null
+        setGenerating(false)
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uploaded, generating, sections, canUseGroq, apiKey, settings, pinToTop])
+  }, [uploaded, generating, sections, canUseGroq, apiKey, settings, pinToTop, pushToast])
 
   // ---------- chat ----------
   const askQuestion = useCallback(async (question: string) => {
@@ -331,17 +345,23 @@ export default function AppShell() {
     setMessages(m => [...m, { id: `u-${Date.now()}`, role: 'user', content: q }])
     setDraft('')
     setAskLoading(true)
+    questionAbortRef.current?.abort()
+    const controller = new AbortController()
+    questionAbortRef.current = controller
     try {
-      const answer = await askGroq(apiKey, settings, uploaded.text, history, q)
+      const answer = await askGroq(apiKey, settings, uploaded.text, history, q, controller.signal)
       setMessages(m => [...m, { id: `a-${Date.now()}`, role: 'assistant', content: answer }])
     } catch (err) {
+      if ((err as Error).name === 'AbortError') return
       const message = err instanceof FriendlyError ? err.message : 'Something went wrong. Please try again.'
       setMessages(m => [...m, { id: `e-${Date.now()}`, role: 'assistant', content: message, isError: true }])
     } finally {
-      setAskLoading(false)
+      if (questionAbortRef.current === controller) {
+        questionAbortRef.current = null
+        setAskLoading(false)
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uploaded, askLoading, canUseGroq, apiKey, settings, messages])
+  }, [uploaded, askLoading, canUseGroq, apiKey, settings, messages, pushToast])
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
@@ -352,8 +372,7 @@ export default function AppShell() {
     if (!uploaded || !result) return
     downloadTextFile(uploaded.fileName, buildDownloadText(uploaded.fileName, result, uploaded.stats, generated))
     pushToast('Summary downloaded as .txt')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uploaded, result, generated])
+  }, [uploaded, result, generated, pushToast])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -386,11 +405,8 @@ export default function AppShell() {
         onClose={() => setSidebarOpen(false)}
         apiKey={apiKey}
         setApiKey={setApiKey}
-        saveKey={saveKey}
-        setSaveKey={setSaveKey}
         revealKey={revealKey}
         setRevealKey={setRevealKey}
-        keyFromEnv={keyFromEnv}
         settings={settings}
         updateSettings={updateSettings}
         onResetSettings={resetSettings}
@@ -549,6 +565,11 @@ export default function AppShell() {
                         <span>· {uploaded.stats.words.toLocaleString()} words</span>
                         <span>· ~{uploaded.stats.readingTimeLabel} read</span>
                       </div>
+                      {uploaded.hasInstructionLikeContent && (
+                        <p role="status" className="mt-2 flex items-start gap-1.5 rounded-lg border border-gold/40 bg-[#fdf6dd] px-2.5 py-2 text-[10.5px] font-semibold leading-relaxed text-[#7a5410] dark:border-gold-dark/25 dark:bg-gold-dark/10 dark:text-gold-dark">
+                          <AlertTriangle size={12} className="mt-0.5 shrink-0" />This document contains instruction-like text. DocLense will treat it as source material, but verify important results against the original.
+                        </p>
+                      )}
                       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                         <button onClick={() => setReaderOpen(true)} className="inline-flex items-center gap-1.5 rounded-xl border border-moss/30 px-3 py-1.5 text-[11px] font-bold text-moss-deep transition hover:bg-moss-mist dark:border-white/15 dark:text-text-dark dark:hover:bg-white/5"><Eye size={13} />View full text</button>
                         <button onClick={() => fileInputRef.current?.click()} className="inline-flex items-center gap-1.5 rounded-xl border border-moss/30 px-3 py-1.5 text-[11px] font-bold text-moss-deep transition hover:bg-moss-mist dark:border-white/15 dark:text-text-dark dark:hover:bg-white/5"><CloudUpload size={13} />Replace</button>

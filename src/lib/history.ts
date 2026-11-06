@@ -2,51 +2,52 @@ export interface HistoryEntry {
   id: string
   savedAt: number
   fileName: string
+  kind: 'PDF' | 'TEXT'
   pageCount: number | null
   words: number
   title: string
   oneLiner: string
   sentimentLabel?: string
-  /** Truncated source text so a history entry can be re-loaded instantly. */
+  /** Source text is kept in memory for this page session only. */
   text: string
 }
 
-const KEY = 'doclense.history.v1'
 const MAX_ENTRIES = 6
-const MAX_TEXT = 30000
+const LEGACY_STORAGE_KEYS = [
+  'doclense.groq-key',
+  'doclense.groq-key-saved',
+  'doclense.history.v1',
+] as const
+
+let entries: HistoryEntry[] = []
+
+function createId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${entries.length}`
+}
+
+export function clearLegacySensitiveStorage(): void {
+  try {
+    for (const key of LEGACY_STORAGE_KEYS) localStorage.removeItem(key)
+  } catch {
+    // Storage may be blocked by the browser. The app no longer writes these keys.
+  }
+}
 
 export function loadHistory(): HistoryEntry[] {
-  try {
-    const raw = localStorage.getItem(KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as HistoryEntry[]
-    return Array.isArray(parsed) ? parsed.filter(e => typeof e?.text === 'string') : []
-  } catch {
-    return []
-  }
+  return [...entries]
 }
 
 export function saveHistoryEntry(entry: Omit<HistoryEntry, 'id' | 'savedAt'>): HistoryEntry[] {
-  const list = loadHistory()
   const next: HistoryEntry = {
     ...entry,
-    text: entry.text.slice(0, MAX_TEXT),
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: createId(),
     savedAt: Date.now(),
   }
-  const deduped = list.filter(e => e.title !== next.title || e.fileName !== next.fileName)
-  const updated = [next, ...deduped].slice(0, MAX_ENTRIES)
-  try {
-    localStorage.setItem(KEY, JSON.stringify(updated))
-  } catch {
-    while (updated.length > 1) {
-      updated.pop()
-      try { localStorage.setItem(KEY, JSON.stringify(updated)); break } catch { /* keep pruning */ }
-    }
-  }
-  return updated
+  const deduped = entries.filter(item => item.title !== next.title || item.fileName !== next.fileName)
+  entries = [next, ...deduped].slice(0, MAX_ENTRIES)
+  return [...entries]
 }
 
 export function clearHistory(): void {
-  try { localStorage.removeItem(KEY) } catch { /* ignore */ }
+  entries = []
 }

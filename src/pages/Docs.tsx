@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, ArrowRight, KeyRound, UploadCloud, CheckSquare, Sparkles, Terminal, Boxes, Cpu, CircleCheck } from 'lucide-react'
+import { ArrowLeft, ArrowRight, KeyRound, UploadCloud, Sparkles, Terminal, Boxes, Cpu, CircleCheck } from 'lucide-react'
 import MarketingNav from '../components/MarketingNav'
 import DocLenseLogo from '../components/DocLenseLogo'
 
@@ -49,9 +49,9 @@ export default function Docs() {
             <ol className="mt-3 list-decimal space-y-2 pl-5 font-body text-[15px] leading-relaxed text-ink-soft dark:text-text-dark-soft">
               <li>Visit <a className="font-semibold text-moss underline decoration-gold underline-offset-2 hover:text-moss-deep dark:text-gold-dark" href="https://console.groq.com" target="_blank" rel="noreferrer">console.groq.com</a> and sign up (it’s free).</li>
               <li>Open <b>API Keys</b> → <b>Create API Key</b>.</li>
-              <li>Paste it into the sidebar of the Studio, or put it in a <code className="rounded bg-moss-mist px-1.5 py-0.5 font-mono text-xs dark:bg-white/10">.env</code> file as <code className="rounded bg-moss-mist px-1.5 py-0.5 font-mono text-xs dark:bg-white/10">VITE_GROQ_API_KEY=gsk_…</code></li>
+              <li>Paste it into the Studio sidebar when you are ready to analyze a document.</li>
             </ol>
-            <p className="mt-3 rounded-xl border border-gold/40 bg-[#fdf6dd] px-3 py-2 text-xs font-semibold text-[#7a5410] dark:border-gold-dark/25 dark:bg-gold-dark/10 dark:text-gold-dark">The key is stored in your browser’s localStorage only. It is never uploaded anywhere except directly to api.groq.com.</p>
+            <p className="mt-3 rounded-xl border border-gold/40 bg-[#fdf6dd] px-3 py-2 text-xs font-semibold text-[#7a5410] dark:border-gold-dark/25 dark:bg-gold-dark/10 dark:text-gold-dark">Your key stays in this tab's memory and is sent only to api.groq.com. Reloading or closing the tab clears it.</p>
           </div>
           <div className="rounded-3xl border border-moss/20 bg-cream p-6 dark:border-white/10 dark:bg-panel-dark">
             <h2 className="flex items-center gap-2.5 font-display text-xl font-bold"><UploadCloud size={20} className="text-persimmon dark:text-persimmon-dark" />Use it</h2>

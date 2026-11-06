@@ -6,7 +6,7 @@
 
 ## ✨ Features
 
-- **Client-Side Document Parsing**: Decode PDFs directly in your browser using `pdfjs-dist` Web Workers, alongside support for `.txt`, `.md`, `.markdown`, and `.csv` files up to 15 MB.
+- **Client-Side Document Parsing**: Decode PDFs directly in your browser using `pdfjs-dist` Web Workers, alongside support for `.txt`, `.md`, and `.text` files up to 15 MB.
 - **Customizable Generation**: Select exactly what to generate before running analysis:
   - **Summary**: Choose between *Concise*, *Executive*, or *Detailed* briefs.
   - **Key Points**: 5 to 7 crisp takeaways and central arguments.
@@ -44,13 +44,8 @@ cd miniproject2
 npm install
 ```
 
-### 3. Set up Groq API Key (Optional)
-You can either:
-- Supply an environment variable in a `.env` file:
-  ```env
-  VITE_GROQ_API_KEY=gsk_your_groq_api_key_here
-  ```
-- Or enter your key directly in the web UI sidebar (stored safely in browser `localStorage`).
+### 3. Add your Groq API key
+Open the Studio and paste a personal Groq API key into the sidebar. The key is held in memory only and is cleared when the tab reloads or closes. Do not put shared secrets in `VITE_*` environment variables because Vite embeds them in public browser assets.
 
 ### 4. Run Development Server
 ```bash
@@ -61,3 +56,10 @@ npm run dev
 ```bash
 npm run build
 ```
+
+## Security notes
+
+- Production preview instrumentation and session recording are intentionally excluded.
+- Recent analyses exist only in memory for the current tab and are not persisted.
+- Uploaded documents are treated as untrusted model context, but AI output can still be incorrect. Review important results against the source.
+- Deployment headers are provided for Vercel (`vercel.json`) and `_headers`-compatible static hosts (`public/_headers`).

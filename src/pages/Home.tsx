@@ -2,8 +2,8 @@ import { useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
-  ArrowRight, UploadCloud, Sparkles, ListChecks, Tags, Gauge, FileQuestion, Download,
-  FileText, ShieldCheck, Keyboard, Zap, Timer, BadgeCheck, Quote, Star, BookOpenCheck,
+  ArrowRight, UploadCloud, Sparkles, ListChecks, Tags, Gauge, FileQuestion,
+  ShieldCheck, Keyboard, Zap, Timer, BadgeCheck, Quote, Star, BookOpenCheck,
 } from 'lucide-react'
 import MarketingNav from '../components/MarketingNav'
 import DocLenseLogo from '../components/DocLenseLogo'
@@ -175,15 +175,15 @@ export default function Home() {
             <div className="md:col-span-8">
               <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold uppercase tracking-widest text-gold-dark"><ShieldCheck size={14} /> Privacy by architecture</div>
               <h2 className="mt-4 font-display text-3xl font-extrabold leading-tight md:text-4xl">Your document never touches our servers —<br />because we don’t have any.</h2>
-              <p className="mt-4 max-w-2xl font-body text-lg leading-relaxed text-cream/85">PDFs are parsed in your browser. Stats are computed locally. Your Groq API key is stored on your device only, and requests go straight from this tab to Groq’s API. There is no backend, no database, no logging of your content — just you and the model.</p>
+              <p className="mt-4 max-w-2xl font-body text-lg leading-relaxed text-cream/85">PDFs are parsed in your browser. Stats are computed locally. Your Groq API key stays in this tab's memory, and requests go straight to Groq’s API. There is no DocLense backend or database.</p>
             </div>
             <div className="md:col-span-4">
               <div className="rounded-2xl border border-white/15 bg-black/20 p-5 font-mono text-[12px] leading-6 text-gold-dark/95">
                 <p className="text-cream/60"># the entire data flow</p>
                 <p><span className="text-cream/80">you.pdf</span> → <span className="text-[#8fe3cf]">pdf.js</span></p>
                 <p>localhost <span className="text-cream/60">{'→'}</span> api.groq.com</p>
-                <p><span className="text-[#8fe3cf]">your key</span> <span className="text-cream/60">→ stays in localStorage</span></p>
-                <p><span className="text-cream/80">no backend · no DB · no tracking</span></p>
+                <p><span className="text-[#8fe3cf]">your key</span> <span className="text-cream/60">→ tab memory only</span></p>
+                <p><span className="text-cream/80">no backend · no DB · no session recording</span></p>
               </div>
             </div>
           </div>

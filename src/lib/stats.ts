@@ -64,7 +64,8 @@ export function extractKeywords(raw: string, limit = 10): string[] {
 export function highlightMatches(text: string, keywords: string[]): Array<{ text: string; highlight: boolean }> {
   if (!keywords.length || !text) return [{ text, highlight: false }]
   const escaped = keywords
-    .filter(k => k.trim().length > 2)
+    .slice(0, 20)
+    .filter(k => k.trim().length > 2 && k.trim().length <= 64)
     .map(k => k.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
     .sort((a, b) => b.length - a.length)
   if (!escaped.length) return [{ text, highlight: false }]
