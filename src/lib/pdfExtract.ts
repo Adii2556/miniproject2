@@ -1,6 +1,7 @@
 import * as pdfjsLib from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { SourceBlock } from './document'
+export { hasPdfSignature } from './fileSecurity'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl as string
 
@@ -19,15 +20,15 @@ export class PdfSafetyError extends Error {
   }
 }
 
-const MAX_PDF_PAGES = 250
-const MAX_EXTRACTED_CHARS = 1_000_000
+export const MAX_PDF_PAGES = 250
+export const MAX_EXTRACTED_CHARS = 1_000_000
 const MAX_CANVAS_PIXELS = 8_000_000
 const MAX_CANVAS_DIMENSION = 4096
-const MAX_PROCESSING_MS = 30_000
+export const PDF_PROCESSING_TIMEOUT_MS = 30_000
 
 function assertWithinBudget(startedAt: number, signal?: AbortSignal): void {
   if (signal?.aborted) throw new DOMException('PDF processing was cancelled', 'AbortError')
-  if (performance.now() - startedAt > MAX_PROCESSING_MS) {
+  if (performance.now() - startedAt > PDF_PROCESSING_TIMEOUT_MS) {
     throw new PdfSafetyError('This PDF took too long to process. Try a shorter or simpler document.')
   }
 }

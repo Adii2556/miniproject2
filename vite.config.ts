@@ -43,4 +43,16 @@ export default defineConfig({
   preview: {
     host: '127.0.0.1',
   },
+  build: {
+    chunkSizeWarningLimit: 800,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-motion': ['framer-motion'],
+          'vendor-zod': ['zod'],
+        },
+      },
+    },
+  },
 })

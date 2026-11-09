@@ -3,10 +3,14 @@ const MAX_TEXT_CHARS = 1_000_000
 
 export class FileSafetyError extends Error {}
 
+export function hasPdfSignature(buffer: ArrayBuffer): boolean {
+  const header = new TextDecoder('latin1').decode(new Uint8Array(buffer.slice(0, 32)))
+  return header.replace(/^[\t\r\n ]{0,16}/, '').startsWith(PDF_HEADER)
+}
+
 export async function validatePdfSignature(file: File): Promise<void> {
-  const headerBytes = new Uint8Array(await file.slice(0, 1024).arrayBuffer())
-  const header = new TextDecoder('latin1').decode(headerBytes)
-  if (!header.includes(PDF_HEADER)) {
+  const header = await file.slice(0, 32).arrayBuffer()
+  if (!hasPdfSignature(header)) {
     throw new FileSafetyError('This file has a .pdf extension but does not contain a valid PDF header.')
   }
 }

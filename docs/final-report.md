@@ -38,7 +38,7 @@ This is not a claim of universal model superiority. Live factual accuracy, laten
 |---|---|
 | ESLint | Passed |
 | Strict TypeScript + production build | Passed |
-| Vitest | 28/28 passed across 8 files; 1.45 s recorded run |
+| Vitest | 41/41 passed across 10 files; 1.79 s recorded combined run |
 | Static security regression | Passed |
 | Production dependency audit | 0 vulnerabilities |
 | Registry signatures | 263 packages verified; 100 attestations verified |
@@ -52,7 +52,7 @@ The browser suite uses a mocked Groq response so it validates request/response i
 ## Performance and bundle observations
 
 - Baseline main application chunk: 104.82 kB (33.58 kB gzip).
-- Delivered `AppShell` chunk: 223.26 kB (67.80 kB gzip). The increase is the cost of integrated schemas, retrieval, evidence UI, multi-document state, and orchestration.
+- Delivered `AppShell` component chunk: 134.42 kB (41.98 kB gzip), plus shared React (17.82 kB gzip), Zod (24.64 kB gzip), and Motion (41.55 kB gzip) vendor chunks. This is not a one-to-one comparison with the baseline bundle layout; the complete Studio route remains heavier because of integrated schemas, retrieval, evidence UI, multi-document state, and orchestration.
 - PDF extraction is split from the route; the pdf.js worker is 436.44 kB (131.07 kB gzip).
 - jsPDF is lazy: 386.23 kB (126.41 kB gzip), loaded only on PDF export.
 - OCR orchestration is lazy; its local worker/core/language files are large (roughly 9.8 MB uncompressed combined) and load only when OCR is requested. Immutable caching is configured for `/ocr/*`.
@@ -62,6 +62,7 @@ The functionality gain is measurable, but first-entry JavaScript is larger than 
 ## Benchmark status and limitations
 
 - Deterministic coverage, retrieval ordering, exact citation validity, support classification, report formatting, prompt boundaries, storage behavior, and UI integration are tested.
+- The deterministic engineering benchmark generated six source-preserving chunks, ranked the synthetic answer-bearing chunk first, accepted both valid citations, rejected both invalid citations, and completed the 300,000-character text pass within its 100 ms threshold on the recorded run. These are synthetic engineering checks, not comparative model-quality scores.
 - Live summary correctness/completeness, Q&A answer accuracy, quiz accuracy, Groq tokens/cost, and model latency: **not run**.
 - OCR accuracy over a labeled scan corpus and browser peak-memory benchmarks: **not run**.
 - No area is reported as numerically better without a measured result.
