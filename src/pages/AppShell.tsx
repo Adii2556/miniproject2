@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -9,18 +9,22 @@ import {
 import Sidebar from '../components/Sidebar'
 import ResultsView, { StatsGrid, GeneratedStamp } from '../components/ResultsView'
 import QuizCard from '../components/QuizCard'
+import DocumentReader from '../components/DocumentReader'
+import CitationChips from '../components/CitationChips'
 import DocLenseLogo from '../components/DocLenseLogo'
 import { useTheme } from '../lib/useTheme'
 import { FileSafetyError, validatePdfSignature, validatePlainText } from '../lib/fileSecurity'
-import { computeStats, extractKeywords, highlightMatches, type DocStats } from '../lib/stats'
+import { computeStats, extractKeywords, type DocStats } from '../lib/stats'
 import {
   callGroq, askGroq, FriendlyError, GROQ_MODELS, normalizeSettings,
-  type AnalysisSettings, type AnalysisResult, type AnalysisSection,
+  type AnalysisSettings, type AnalysisResult, type AnalysisSection, type AnalysisProgress,
 } from '../lib/groq'
 import { SAMPLE_DOCS } from '../lib/samples'
 import { clearHistory, clearLegacySensitiveStorage, loadHistory, saveHistoryEntry, type HistoryEntry } from '../lib/history'
 import { buildDownloadText, downloadTextFile, type GeneratedMap } from '../lib/analysis'
 import { inspectDocumentSafety } from '../lib/documentSecurity'
+import { createTextDocument, stableDocumentId, type Citation, type DocumentModel } from '../lib/document'
+import type { OcrProgress } from '../lib/ocr'
 
 const LS_SETTINGS = 'doclense.settings.v1'
 const MAX_FILE_MB = 15
@@ -33,26 +37,36 @@ const DEFAULT_SETTINGS: AnalysisSettings = {
   summaryStyle: 'concise',
   language: 'English',
   readingLevel: 'professional',
+  analysisMode: 'sampled',
+  maxChunks: 8,
+  quizDifficulty: 'adaptive',
 }
 
 type SectionKey = 'summary' | 'keyPoints' | 'keywords' | 'sentiment' | 'quiz'
 const SECTION_KEYS: SectionKey[] = ['summary', 'keyPoints', 'keywords', 'sentiment', 'quiz']
 
-interface UploadedDoc {
-  fileName: string
-  kind: 'PDF' | 'TEXT'
+interface UploadedDoc extends DocumentModel {
   sizeBytes: number
-  pageCount: number | null
-  text: string
   firstPageDataUrl: string | null
   stats: DocStats
   hasInstructionLikeContent: boolean
+  ocrApplied?: boolean
+}
+
+interface PendingOcr {
+  file: File
+  buffer: ArrayBuffer
+  documentId: string
+  pageCount: number
+  firstPageDataUrl: string | null
 }
 
 interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
+  citations?: Citation[]
+  evidenceStatus?: 'verified' | 'uncertain' | 'unavailable'
   isError?: boolean
 }
 
@@ -105,12 +119,16 @@ export default function AppShell() {
 
   // ---------- document state ----------
   const [uploaded, setUploaded] = useState<UploadedDoc | null>(null)
+  const [documents, setDocuments] = useState<UploadedDoc[]>([])
   const [uploading, setUploading] = useState<string | null>(null)
   const [uploadStage, setUploadStage] = useState(0)
   const [uploadError, setUploadError] = useState<UploadErrorState | null>(null)
+  const [pendingOcr, setPendingOcr] = useState<PendingOcr | null>(null)
+  const [ocrProgress, setOcrProgress] = useState<OcrProgress | null>(null)
   const [dragActive, setDragActive] = useState(false)
   const [highlightKeywords, setHighlightKeywords] = useState(true)
   const [readerOpen, setReaderOpen] = useState(false)
+  const [activeCitation, setActiveCitation] = useState<Citation | null>(null)
 
   // ---------- analysis state ----------
   const [sections, setSections] = useState<Record<SectionKey, boolean>>({ summary: true, keyPoints: true, keywords: true, sentiment: true, quiz: true })
@@ -120,6 +138,7 @@ export default function AppShell() {
   const [generated, setGenerated] = useState<GeneratedMap>({ summary: false, keyPoints: false, keywords: false, sentiment: false, quiz: false })
   const [showResults, setShowResults] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
+  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null)
 
   // ---------- chat about the doc ----------
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -129,6 +148,7 @@ export default function AppShell() {
   // ---------- history / toasts ----------
   const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory())
   const [toasts, setToasts] = useState<Toast[]>([])
+  const workspaceStats = useMemo(() => computeStats(documents.map(document => document.fullText).join('\n\n')), [documents])
 
   const mainRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -176,19 +196,22 @@ export default function AppShell() {
   }, [])
 
   // ---------- ingest pipeline ----------
-  const ingestText = useCallback((text: string, fileName: string, kind: 'PDF' | 'TEXT', sizeBytes: number, pageCount: number | null, firstPageDataUrl: string | null) => {
-    const trimmed = text.trim()
-    const stats = computeStats(trimmed)
-    const safety = inspectDocumentSafety(trimmed)
-    setUploaded({ fileName, kind, sizeBytes, pageCount, text: trimmed, firstPageDataUrl, stats, hasInstructionLikeContent: safety.hasInstructionLikeContent })
+  const ingestDocument = useCallback((documentModel: DocumentModel, sizeBytes: number, firstPageDataUrl: string | null, replaceWorkspace = false, ocrApplied = false) => {
+    const stats = computeStats(documentModel.fullText)
+    const safety = inspectDocumentSafety(documentModel.fullText)
+    const next: UploadedDoc = { ...documentModel, sizeBytes, firstPageDataUrl, stats, hasInstructionLikeContent: safety.hasInstructionLikeContent, ocrApplied }
+    setUploaded(next)
+    setDocuments(current => replaceWorkspace ? [next] : [...current.filter(document => document.id !== next.id), next].slice(-6))
     setResult(null)
     setShowResults(false)
     setGenError(null)
     setMessages([])
     setUploadError(null)
+    setPendingOcr(null)
+    setOcrProgress(null)
   }, [])
 
-  const processFile = useCallback(async (file: File) => {
+  const processFile = useCallback(async (file: File, documentOrdinal = documents.length) => {
     setUploadError(null)
     const ext = file.name.toLowerCase().split('.').pop() ?? ''
     const kind: 'PDF' | 'TEXT' = ext === 'pdf' ? 'PDF' : 'TEXT'
@@ -215,19 +238,22 @@ export default function AppShell() {
         await validatePdfSignature(file)
         const buffer = await file.arrayBuffer()
         const { extractPdf } = await import('../lib/pdfExtract')
-        const { text, pageCount, firstPageDataUrl } = await extractPdf(buffer, controller.signal)
+        const documentId = stableDocumentId(file.name, documentOrdinal)
+        const { text, pageTexts, pageCount, firstPageDataUrl } = await extractPdf(buffer, controller.signal, documentId, file.name)
         if (text.replace(/\s/g, '').length < 30) {
-          setUploadError({ title: 'No readable text in this PDF', detail: pageCount > 0 ? `Found ${pageCount} page${pageCount > 1 ? 's' : ''}, but every page appears to be a scanned image. DocLense works on text-based PDFs — run the file through OCR (e.g. Adobe Acrobat → “Recognize Text”) first.` : 'The PDF could not be read at all.', })
+          setPendingOcr({ file, buffer, documentId, pageCount, firstPageDataUrl })
+          setUploadError({ title: 'This PDF appears to be scanned', detail: `Found ${pageCount} image-only page${pageCount === 1 ? '' : 's'}. You can run bounded English OCR locally on up to 10 pages. The packaged OCR engine runs in this browser; document pixels are not sent to an OCR service. OCR text may contain mistakes.`, })
           return
         }
-        ingestText(text, file.name, kind, file.size, pageCount, firstPageDataUrl)
+        const documentModel: DocumentModel = { id: documentId, fileName: file.name, kind, fullText: text.trim(), blocks: pageTexts.map((pageText, index) => ({ id: `${documentId}:p${index + 1}`, documentId, documentName: file.name, label: `${file.name} · Page ${index + 1}`, pageNumber: index + 1, text: pageText })), pageCount }
+        ingestDocument(documentModel, file.size, firstPageDataUrl)
       } else {
         const text = validatePlainText(await file.text())
         if (!text.trim()) {
           setUploadError({ title: 'That file is empty', detail: 'The file opened fine, but it contains only whitespace — nothing to analyze. Paste the content into a new .txt file and try again.' })
           return
         }
-        ingestText(text, file.name, kind, file.size, null, null)
+        ingestDocument(createTextDocument(text, file.name, stableDocumentId(file.name, documentOrdinal)), file.size, null)
       }
       pushToast('Document loaded — stats computed')
     } catch (err) {
@@ -245,31 +271,84 @@ export default function AppShell() {
         if (fileInputRef.current) fileInputRef.current.value = ''
       }
     }
-  }, [ingestText, pushToast])
+  }, [documents.length, ingestDocument, pushToast])
+
+  const processFiles = useCallback(async (files: FileList | File[]) => {
+    const availableSlots = Math.max(0, 6 - documents.length)
+    const selected = Array.from(files).slice(0, availableSlots)
+    if (selected.length === 0) {
+      setUploadError({ title: 'Workspace limit reached', detail: 'DocLense supports up to six documents in one workspace. Remove one before adding another.' })
+      return
+    }
+    for (const [index, file] of selected.entries()) await processFile(file, documents.length + index)
+    if (selected.length > 1) pushToast(`${selected.length} documents added to the workspace`)
+    if (Array.from(files).length > selected.length) pushToast('Workspace capped at six documents', 'error')
+  }, [documents.length, processFile, pushToast])
+
+  const runPendingOcr = useCallback(async () => {
+    if (!pendingOcr) return
+    fileAbortRef.current?.abort()
+    const controller = new AbortController()
+    fileAbortRef.current = controller
+    setUploading(`OCR · ${pendingOcr.file.name}`)
+    setUploadError(null)
+    setOcrProgress({ page: 0, totalPages: Math.min(pendingOcr.pageCount, 10), stage: 'Preparing OCR…', percent: 0 })
+    try {
+      const { extractScannedPdfText } = await import('../lib/ocr')
+      const result = await extractScannedPdfText(pendingOcr.buffer, controller.signal, setOcrProgress)
+      const fullText = result.pageTexts.join('\n\n').trim()
+      if (fullText.replace(/\s/g, '').length < 20) {
+        setUploadError({ title: 'OCR found too little readable text', detail: 'The scan may be low contrast, handwritten, rotated, or use an unsupported language. Try a clearer export or run dedicated OCR software.' })
+        return
+      }
+      const model: DocumentModel = {
+        id: pendingOcr.documentId,
+        fileName: pendingOcr.file.name,
+        kind: 'PDF',
+        fullText,
+        pageCount: pendingOcr.pageCount,
+        blocks: result.pageTexts.map((text, index) => ({ id: `${pendingOcr.documentId}:p${index + 1}`, documentId: pendingOcr.documentId, documentName: pendingOcr.file.name, label: `${pendingOcr.file.name} · OCR page ${index + 1}`, pageNumber: index + 1, text })),
+      }
+      ingestDocument(model, pendingOcr.file.size, pendingOcr.firstPageDataUrl, false, true)
+      pushToast(result.limited ? `OCR complete for the first ${result.processedPages} pages; later pages were not processed` : 'Local OCR complete; review the extracted text for errors')
+    } catch (error) {
+      if ((error as Error).name === 'AbortError') return
+      setUploadError({ title: 'OCR could not finish', detail: error instanceof Error ? error.message : 'The local OCR worker failed. Try a shorter or clearer scan.' })
+    } finally {
+      if (fileAbortRef.current === controller) {
+        fileAbortRef.current = null
+        setUploading(null)
+      }
+    }
+  }, [ingestDocument, pendingOcr, pushToast])
 
   const loadSample = useCallback((id: string) => {
     const sample = SAMPLE_DOCS.find(s => s.id === id)
     if (!sample) return
     setUploadError(null)
-    ingestText(sample.text, sample.fileName, 'TEXT', new Blob([sample.text]).size, null, null)
+    ingestDocument(createTextDocument(sample.text, sample.fileName, stableDocumentId(sample.fileName, documents.length)), new Blob([sample.text]).size, null)
     pushToast('Sample loaded')
-  }, [ingestText, pushToast])
+  }, [documents.length, ingestDocument, pushToast])
 
   const loadFromHistory = useCallback((entry: HistoryEntry) => {
-    ingestText(entry.text, entry.fileName, entry.kind, new Blob([entry.text]).size, entry.pageCount, null)
+    ingestDocument(createTextDocument(entry.text, entry.fileName, stableDocumentId(entry.fileName)), new Blob([entry.text]).size, null, true)
     pushToast('Loaded from your recents')
     setSidebarOpen(false)
-  }, [ingestText, pushToast])
+  }, [ingestDocument, pushToast])
 
   const resetDocument = useCallback(() => {
     generationAbortRef.current?.abort()
     questionAbortRef.current?.abort()
     setUploaded(null)
+    setDocuments([])
     setResult(null)
     setShowResults(false)
     setGenError(null)
     setMessages([])
     setUploadError(null)
+    setPendingOcr(null)
+    setOcrProgress(null)
+    setActiveCitation(null)
     pinToTop()
   }, [pinToTop])
 
@@ -291,11 +370,12 @@ export default function AppShell() {
     setGenStage(0)
     setGenerating(true)
     setGenError(null)
+    setAnalysisProgress(null)
     generationAbortRef.current?.abort()
     const controller = new AbortController()
     generationAbortRef.current = controller
     try {
-      const res = await callGroq(apiKey, settings, chosen as AnalysisSection[], uploaded.text, controller.signal)
+      const res = await callGroq(apiKey, settings, chosen as AnalysisSection[], documents, controller.signal, setAnalysisProgress)
       const gen: GeneratedMap = {
         summary: chosen.includes('summary'),
         keyPoints: chosen.includes('keyPoints'),
@@ -317,7 +397,7 @@ export default function AppShell() {
         title: res.title ?? uploaded.fileName.replace(/\.[^.]+$/, ''),
         oneLiner: res.oneLiner ?? '',
         sentimentLabel: res.sentiment?.label,
-        text: uploaded.text,
+        text: uploaded.fullText,
       }))
     } catch (err) {
       if ((err as Error).name === 'AbortError') return
@@ -328,9 +408,10 @@ export default function AppShell() {
       if (generationAbortRef.current === controller) {
         generationAbortRef.current = null
         setGenerating(false)
+        setAnalysisProgress(null)
       }
     }
-  }, [uploaded, generating, sections, canUseGroq, apiKey, settings, pinToTop, pushToast])
+  }, [uploaded, documents, generating, sections, canUseGroq, apiKey, settings, pinToTop, pushToast])
 
   // ---------- chat ----------
   const askQuestion = useCallback(async (question: string) => {
@@ -349,8 +430,8 @@ export default function AppShell() {
     const controller = new AbortController()
     questionAbortRef.current = controller
     try {
-      const answer = await askGroq(apiKey, settings, uploaded.text, history, q, controller.signal)
-      setMessages(m => [...m, { id: `a-${Date.now()}`, role: 'assistant', content: answer }])
+      const answer = await askGroq(apiKey, settings, documents, history, q, controller.signal)
+      setMessages(m => [...m, { id: `a-${Date.now()}`, role: 'assistant', content: answer.text, citations: answer.citations, evidenceStatus: answer.evidenceStatus }])
     } catch (err) {
       if ((err as Error).name === 'AbortError') return
       const message = err instanceof FriendlyError ? err.message : 'Something went wrong. Please try again.'
@@ -361,7 +442,7 @@ export default function AppShell() {
         setAskLoading(false)
       }
     }
-  }, [uploaded, askLoading, canUseGroq, apiKey, settings, messages, pushToast])
+  }, [uploaded, documents, askLoading, canUseGroq, apiKey, settings, messages, pushToast])
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
@@ -370,9 +451,10 @@ export default function AppShell() {
   // ---------- keyboard shortcuts ----------
   const downloadReport = useCallback(() => {
     if (!uploaded || !result) return
-    downloadTextFile(uploaded.fileName, buildDownloadText(uploaded.fileName, result, uploaded.stats, generated))
+    const names = documents.map(document => document.fileName)
+    downloadTextFile(uploaded.fileName, buildDownloadText(names, result, workspaceStats, generated))
     pushToast('Summary downloaded as .txt')
-  }, [uploaded, result, generated, pushToast])
+  }, [uploaded, documents, result, generated, pushToast, workspaceStats])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -391,12 +473,24 @@ export default function AppShell() {
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setDragActive(false)
-    const file = e.dataTransfer.files?.[0]
-    if (file) processFile(file)
-  }, [processFile])
+    void processFiles(e.dataTransfer.files)
+  }, [processFiles])
 
   const anyGenerated = result !== null
-  const kwForReader = generated.keywords && result?.keywords?.length ? result.keywords : extractKeywords(uploaded?.text ?? '')
+  const kwForReader = generated.keywords && result?.keywords?.length ? result.keywords : extractKeywords(documents.map(document => document.fullText).join('\n\n'))
+  const openCitation = useCallback((citation: Citation) => {
+    setActiveCitation(citation)
+    setReaderOpen(true)
+  }, [])
+  const removeDocument = useCallback((documentId: string) => {
+    const next = documents.filter(document => document.id !== documentId)
+    setDocuments(next)
+    setUploaded(next.at(-1) ?? null)
+    setResult(null)
+    setShowResults(false)
+    setMessages([])
+    setActiveCitation(null)
+  }, [documents])
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-paper-grain font-sans text-ink dark:bg-moss-night-deep dark:text-text-dark">
@@ -440,15 +534,15 @@ export default function AppShell() {
         </header>
 
         {/* ===== scrollable workspace ===== */}
-        <main ref={mainRef} className="relative flex-1 overflow-y-auto overscroll-contain">
+        <main id="main-content" tabIndex={-1} ref={mainRef} className="relative flex-1 overflow-y-auto overscroll-contain">
           <div className="mx-auto max-w-4xl space-y-4 px-3 pb-14 pt-4 sm:px-6 sm:pt-5">
 
             {/* ===================== RESULTS (pinned to the very top) ===================== */}
             {uploaded && showResults && anyGenerated && (
               <div key="results" className="space-y-4">
                 <GeneratedStamp />
-                <ResultsView fileName={uploaded.fileName} stats={uploaded.stats} result={result!} generated={generated} onToast={(m) => pushToast(m)} />
-                {generated.quiz && result?.quiz && <QuizCard quiz={result.quiz} onToast={(m) => pushToast(m)} />}
+                <ResultsView fileNames={documents.map(document => document.fileName)} stats={workspaceStats} result={result!} generated={generated} onToast={(m) => pushToast(m)} onOpenCitation={openCitation} />
+                {generated.quiz && result?.quiz && <QuizCard quiz={result.quiz} onToast={(m) => pushToast(m)} onOpenCitation={openCitation} />}
                 <div className="flex items-center gap-3 px-1 pt-1 text-[10.5px] font-bold uppercase tracking-[0.18em] text-ink-soft/70 dark:text-text-dark-soft/60">
                   <span className="h-px flex-1 bg-moss/20 dark:bg-white/10" />
                   Document &amp; chat
@@ -458,7 +552,7 @@ export default function AppShell() {
             )}
 
             {/* ===================== STATS (after results, or right under upload) ===================== */}
-            {uploaded && showResults && anyGenerated && <StatsGrid stats={uploaded.stats} />}
+            {uploaded && showResults && anyGenerated && <StatsGrid stats={workspaceStats} />}
 
             {/* ===================== UPLOAD ERROR ===================== */}
             <AnimatePresence>
@@ -468,7 +562,10 @@ export default function AppShell() {
                   <div className="min-w-0">
                     <p className="font-display text-base font-extrabold text-[#8a2c0d] dark:text-persimmon-dark">{uploadError.title}</p>
                     <p className="mt-1 font-body text-[14px] leading-relaxed text-[#6e3418] dark:text-text-dark-soft">{uploadError.detail}</p>
-                    <button onClick={() => { setUploadError(null); fileInputRef.current?.click() }} className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl border border-persimmon/50 px-3 py-1.5 font-sans text-[11.5px] font-extrabold uppercase tracking-wide text-[#8a2c0d] transition hover:bg-persimmon hover:text-cream dark:border-persimmon-dark/40 dark:text-persimmon-dark dark:hover:bg-persimmon-dark dark:hover:text-[#2b1206]">Try a different file <ArrowRight size={12} strokeWidth={3} /></button>
+                    <div className="mt-2.5 flex flex-wrap gap-2">
+                      {pendingOcr && <button onClick={() => void runPendingOcr()} className="inline-flex items-center gap-1.5 rounded-xl bg-moss px-3 py-2 font-sans text-[11.5px] font-extrabold uppercase tracking-wide text-cream transition hover:bg-moss-deep dark:bg-persimmon-dark dark:text-[#2b1206]"><BookOpenText size={13} />Run local OCR</button>}
+                      <button onClick={() => { setUploadError(null); setPendingOcr(null); fileInputRef.current?.click() }} className="inline-flex items-center gap-1.5 rounded-xl border border-persimmon/50 px-3 py-1.5 font-sans text-[11.5px] font-extrabold uppercase tracking-wide text-[#8a2c0d] transition hover:bg-persimmon hover:text-cream dark:border-persimmon-dark/40 dark:text-persimmon-dark dark:hover:bg-persimmon-dark dark:hover:text-[#2b1206]">Try a different file <ArrowRight size={12} strokeWidth={3} /></button>
+                    </div>
                   </div>
                   <button onClick={() => setUploadError(null)} className="ml-auto h-fit rounded-lg p-1.5 text-[#8a2c0d] transition hover:bg-persimmon/20 dark:text-persimmon-dark" aria-label="Dismiss"><X size={16} /></button>
                 </motion.div>
@@ -481,11 +578,12 @@ export default function AppShell() {
                 <div className="mx-auto flex h-16 w-16 items-center justify-center">
                   <Loader2 className="animate-spin text-moss dark:text-persimmon-dark" size={44} strokeWidth={2.2} />
                 </div>
-                <p className="mt-4 font-display text-xl font-extrabold text-ink dark:text-text-dark">Munching “{uploading.length > 42 ? uploading.slice(0, 40) + '…' : uploading}”</p>
-                <p className="mt-1.5 font-mono text-xs font-semibold text-persimmon dark:text-persimmon-dark">{UPLOAD_STAGES[uploadStage]}</p>
+                <p className="mt-4 font-display text-xl font-extrabold text-ink dark:text-text-dark">Processing “{uploading.length > 42 ? uploading.slice(0, 40) + '…' : uploading}”</p>
+                <p className="mt-1.5 font-mono text-xs font-semibold text-persimmon dark:text-persimmon-dark">{ocrProgress?.stage ?? UPLOAD_STAGES[uploadStage]}</p>
                 <div className="mx-auto mt-4 h-2 max-w-xs overflow-hidden rounded-full bg-moss-mist dark:bg-white/10">
-                  <motion.div className="h-full rounded-full bg-gradient-to-r from-persimmon via-gold to-moss" animate={{ width: `${((uploadStage + 1) / UPLOAD_STAGES.length) * 100}%` }} transition={{ ease: 'easeOut', duration: 0.5 }} />
+                  <motion.div className="h-full rounded-full bg-gradient-to-r from-persimmon via-gold to-moss" animate={{ width: `${ocrProgress?.percent ?? ((uploadStage + 1) / UPLOAD_STAGES.length) * 100}%` }} transition={{ ease: 'easeOut', duration: 0.5 }} />
                 </div>
+                <button type="button" onClick={() => fileAbortRef.current?.abort()} className="mt-4 rounded-xl border border-moss/25 px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-moss-deep transition hover:bg-moss-mist dark:border-white/15 dark:text-text-dark dark:hover:bg-white/5">Cancel processing</button>
               </section>
 
             ) : !uploaded ? (
@@ -493,7 +591,7 @@ export default function AppShell() {
               <section
                 role="button"
                 tabIndex={0}
-                aria-label="Upload a PDF or TXT file"
+                aria-label="Upload PDF or text files"
                 onClick={() => fileInputRef.current?.click()}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInputRef.current?.click() } }}
                 onDragOver={(e) => { e.preventDefault(); setDragActive(true) }}
@@ -501,20 +599,20 @@ export default function AppShell() {
                 onDrop={onDrop}
                 className={`group relative cursor-pointer overflow-hidden rounded-[2rem] border-[2.5px] border-dashed p-8 text-center shadow-sm transition-all duration-300 sm:p-12 ${dragActive ? 'scale-[1.015] border-persimmon bg-persimmon-mist/60 shadow-xl dark:border-persimmon-dark dark:bg-persimmon-dark/10' : 'border-moss/35 bg-cream/85 hover:border-moss hover:bg-cream hover:shadow-lg dark:border-white/15 dark:bg-panel-dark dark:hover:border-persimmon-dark/50'} focus-visible:outline-persimmon`}
               >
-                <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md,.text,application/pdf,text/plain" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) processFile(f) }} />
+                <input ref={fileInputRef} type="file" multiple accept=".pdf,.txt,.md,.text,application/pdf,text/plain" className="hidden" onChange={(e) => { if (e.target.files?.length) void processFiles(e.target.files) }} />
                 <div className="pointer-events-none absolute -left-16 -top-16 h-48 w-48 rounded-full bg-moss-mist/60 blur-3xl transition dark:bg-moss/10" />
                 <div className="pointer-events-none absolute -bottom-16 -right-16 h-48 w-48 rounded-full bg-persimmon-mist/70 blur-3xl transition dark:bg-persimmon-dark/5" />
                 <div className="relative">
                   <motion.div animate={{ y: [0, -8, 0] }} transition={{ duration: 3.4, repeat: Infinity, ease: 'easeInOut' }} className="mx-auto flex h-20 w-20 items-center justify-center rounded-3xl bg-moss text-cream shadow-[0_6px_0_#0e4740] dark:bg-persimmon-dark dark:text-[#2b1206] dark:shadow-[0_6px_0_#b4532a]">
                     <CloudUpload size={38} strokeWidth={2} />
                   </motion.div>
-                  <h1 className="mt-5 font-display text-3xl font-extrabold tracking-tight text-ink dark:text-text-dark sm:text-4xl">{dragActive ? 'Drop it like it’s hot' : 'Drop your document here'}</h1>
-                  <p className="mx-auto mt-2 max-w-md font-body text-[15px] leading-relaxed text-ink-soft dark:text-text-dark-soft">PDF or TXT, up to {MAX_FILE_MB} MB — parsed entirely in your browser. Then choose exactly which insights you want.</p>
+                  <h1 className="mt-5 font-display text-3xl font-extrabold tracking-tight text-ink dark:text-text-dark sm:text-4xl">{dragActive ? 'Release to add documents' : 'Build your evidence workspace'}</h1>
+                  <p className="mx-auto mt-2 max-w-md font-body text-[15px] leading-relaxed text-ink-soft dark:text-text-dark-soft">Add up to six PDF or text files, {MAX_FILE_MB} MB each. Extraction stays in this tab; selected source excerpts are sent to Groq only when you analyze or ask a question.</p>
                   <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
                     <span className="inline-flex items-center gap-2 rounded-2xl bg-moss px-5 py-3 font-sans text-sm font-extrabold text-cream shadow-[0_3px_0_#0e4740] transition group-hover:bg-moss-deep dark:bg-persimmon-dark dark:text-[#2b1206] dark:shadow-[0_3px_0_#b4532a]"><FileText size={17} />Browse files</span>
                     <span className="inline-flex items-center gap-2 rounded-2xl border-2 border-moss/30 px-5 py-[10px] font-sans text-sm font-bold text-moss-deep dark:border-white/15 dark:text-text-dark"><Sparkles size={15} />or pick a sample below</span>
                   </div>
-                  <p className="mt-4 inline-flex items-center gap-1.5 text-[11px] font-semibold text-ink-soft/90 dark:text-text-dark-soft/80"><Lock size={11} />Private by architecture — your file never leaves this tab except to Groq.</p>
+                  <p className="mt-4 inline-flex items-center gap-1.5 text-[11px] font-semibold text-ink-soft/90 dark:text-text-dark-soft/80"><Lock size={11} />Keys and documents stay in memory and clear on reload.</p>
                 </div>
               </section>
             ) : null}
@@ -544,7 +642,22 @@ export default function AppShell() {
             {uploaded && !uploading && (
               <>
                 {/* stats stay above the uploader before generating; after generating they render at top */}
-                {!(showResults && anyGenerated) && <StatsGrid stats={uploaded.stats} />}
+                {!(showResults && anyGenerated) && <StatsGrid stats={workspaceStats} />}
+
+                {documents.length > 1 && (
+                  <section aria-label="Documents in workspace" className="rounded-2xl border border-moss/20 bg-cream/70 p-3 dark:border-white/10 dark:bg-panel-dark/70">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="mr-1 text-[10px] font-extrabold uppercase tracking-[0.18em] text-ink-soft dark:text-text-dark-soft">{documents.length} sources</span>
+                      {documents.map(document => (
+                        <span key={document.id} className="inline-flex max-w-[16rem] items-center gap-1.5 rounded-xl border border-moss/20 bg-paper px-2.5 py-1.5 text-[11px] font-bold text-ink dark:border-white/10 dark:bg-white/5 dark:text-text-dark">
+                          <FileText size={12} className="shrink-0 text-moss dark:text-gold-dark" />
+                          <span className="truncate">{document.fileName}</span>
+                          <button type="button" onClick={() => removeDocument(document.id)} className="rounded p-0.5 text-ink-soft hover:bg-persimmon-mist hover:text-persimmon dark:text-text-dark-soft" aria-label={`Remove ${document.fileName}`}><X size={11} /></button>
+                        </span>
+                      ))}
+                    </div>
+                  </section>
+                )}
 
                 <section className="overflow-hidden rounded-3xl border border-moss/25 bg-cream shadow-sm dark:border-white/10 dark:bg-panel-dark">
                   <div className="flex items-center gap-4 p-4 sm:p-5">
@@ -560,6 +673,7 @@ export default function AppShell() {
                       <p className="truncate font-display text-[15px] font-bold text-ink dark:text-text-dark" title={uploaded.fileName}>{uploaded.fileName}</p>
                       <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] font-semibold text-ink-soft dark:text-text-dark-soft">
                         <span className="inline-flex items-center gap-1 rounded-md bg-moss-mist px-1.5 py-0.5 text-[9.5px] font-extrabold uppercase tracking-wider text-moss-deep dark:bg-white/8 dark:text-gold-dark">{uploaded.kind}</span>
+                        {uploaded.ocrApplied && <span className="rounded-md border border-gold/35 bg-gold/10 px-1.5 py-0.5 text-[9.5px] font-extrabold uppercase tracking-wider text-[#73500f] dark:text-gold-dark">OCR · verify text</span>}
                         <span>{(uploaded.sizeBytes / 1024).toFixed(0)} KB</span>
                         {uploaded.pageCount !== null && <span>· {uploaded.pageCount} page{uploaded.pageCount === 1 ? '' : 's'}</span>}
                         <span>· {uploaded.stats.words.toLocaleString()} words</span>
@@ -571,10 +685,10 @@ export default function AppShell() {
                         </p>
                       )}
                       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                        <button onClick={() => setReaderOpen(true)} className="inline-flex items-center gap-1.5 rounded-xl border border-moss/30 px-3 py-1.5 text-[11px] font-bold text-moss-deep transition hover:bg-moss-mist dark:border-white/15 dark:text-text-dark dark:hover:bg-white/5"><Eye size={13} />View full text</button>
-                        <button onClick={() => fileInputRef.current?.click()} className="inline-flex items-center gap-1.5 rounded-xl border border-moss/30 px-3 py-1.5 text-[11px] font-bold text-moss-deep transition hover:bg-moss-mist dark:border-white/15 dark:text-text-dark dark:hover:bg-white/5"><CloudUpload size={13} />Replace</button>
-                        <button onClick={resetDocument} className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[11px] font-bold text-ink-soft transition hover:bg-persimmon-mist hover:text-persimmon dark:text-text-dark-soft dark:hover:bg-persimmon-dark/10 dark:hover:text-persimmon-dark"><Trash2 size={13} />Remove</button>
-                        <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md,.text,application/pdf,text/plain" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) processFile(f) }} />
+                        <button onClick={() => { setActiveCitation(null); setReaderOpen(true) }} className="inline-flex items-center gap-1.5 rounded-xl border border-moss/30 px-3 py-1.5 text-[11px] font-bold text-moss-deep transition hover:bg-moss-mist dark:border-white/15 dark:text-text-dark dark:hover:bg-white/5"><Eye size={13} />Open evidence reader</button>
+                        <button onClick={() => fileInputRef.current?.click()} className="inline-flex items-center gap-1.5 rounded-xl border border-moss/30 px-3 py-1.5 text-[11px] font-bold text-moss-deep transition hover:bg-moss-mist dark:border-white/15 dark:text-text-dark dark:hover:bg-white/5"><CloudUpload size={13} />Add documents</button>
+                        <button onClick={resetDocument} className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[11px] font-bold text-ink-soft transition hover:bg-persimmon-mist hover:text-persimmon dark:text-text-dark-soft dark:hover:bg-persimmon-dark/10 dark:hover:text-persimmon-dark"><Trash2 size={13} />Clear workspace</button>
+                        <input ref={fileInputRef} type="file" multiple accept=".pdf,.txt,.md,.text,application/pdf,text/plain" className="hidden" onChange={(e) => { if (e.target.files?.length) void processFiles(e.target.files) }} />
                       </div>
                     </div>
                   </div>
@@ -622,25 +736,25 @@ export default function AppShell() {
                     {/* ---- generate row ---- */}
                     <div className="mt-3.5 flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
                       <div className="min-w-0">
-                        <p className="text-[11px] font-semibold text-ink-soft dark:text-text-dark-soft"><span className="font-extrabold text-moss-deep dark:text-gold-dark">{selectedCount} of 5</span> insights selected · {settings.model.split('/').pop()} · temp {settings.temperature.toFixed(2)} · ≤{settings.maxTokens} tokens</p>
+                        <p className="text-[11px] font-semibold text-ink-soft dark:text-text-dark-soft"><span className="font-extrabold text-moss-deep dark:text-gold-dark">{selectedCount} of 5</span> insights · {settings.analysisMode} mode · {settings.maxChunks}-chunk budget · ≤{Math.ceil(settings.maxChunks / 2) + 2} Groq requests</p>
                         {!canUseGroq && (
                           <button onClick={() => setSidebarOpen(true)} className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-bold text-[#a33a10] underline decoration-persimmon/50 underline-offset-2 transition hover:text-persimmon dark:text-persimmon-dark"><KeyRound size={11} />No Groq key yet — add one in the sidebar, it takes 20 seconds<ArrowRight size={11} /></button>
                         )}
                       </div>
                       <button
-                        onClick={generate}
-                        disabled={generating || selectedCount === 0}
+                        onClick={generating ? () => generationAbortRef.current?.abort() : generate}
+                        disabled={!generating && selectedCount === 0}
                         className="group inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-persimmon px-6 py-4 font-sans text-[15px] font-extrabold text-cream shadow-[0_4px_0_#b93a17] transition hover:bg-persimmon-soft active:translate-y-0.5 active:shadow-[0_2px_0_#b93a17] disabled:cursor-not-allowed disabled:opacity-70 dark:bg-persimmon-dark dark:text-[#2b1206] dark:shadow-[0_4px_0_#b4532a]"
                       >
                         {generating ? (
-                          <><Loader2 size={18} className="animate-spin" />Analyzing… <span className="font-mono text-[11px] font-semibold text-cream/85 dark:text-[#2b1206]/75">{GEN_STAGES[genStage]}</span></>
+                          <><X size={18} />Cancel <span className="font-mono text-[11px] font-semibold text-cream/85 dark:text-[#2b1206]/75">{analysisProgress?.label ?? GEN_STAGES[genStage]}</span></>
                         ) : (
                           <><Zap size={18} strokeWidth={2.5} />{anyGenerated ? 'Regenerate' : 'Generate analysis'}<kbd className="rounded-md border border-cream/40 bg-black/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-cream/95 dark:border-[#2b1206]/30 dark:text-[#2b1206]">G</kbd></>
                         )}
                       </button>
                     </div>
                     {generating && (
-                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-moss-mist dark:bg-white/10"><motion.div className="h-full rounded-full bg-gradient-to-r from-persimmon via-gold to-moss" animate={{ width: `${((genStage + 1) / GEN_STAGES.length) * 100}%` }} transition={{ ease: 'easeOut', duration: 0.6 }} /></div>
+                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-moss-mist dark:bg-white/10"><motion.div className="h-full rounded-full bg-gradient-to-r from-persimmon via-gold to-moss" animate={{ width: `${analysisProgress && analysisProgress.total > 0 ? Math.max(8, (analysisProgress.completed / analysisProgress.total) * 85 + (analysisProgress.phase === 'synthesizing' ? 10 : 0)) : ((genStage + 1) / GEN_STAGES.length) * 100}%` }} transition={{ ease: 'easeOut', duration: 0.6 }} /></div>
                     )}
                     {genError && (
                       <div role="alert" className="mt-3 flex items-start gap-2 rounded-2xl border border-persimmon/40 bg-persimmon-mist px-3.5 py-2.5 text-[12.5px] font-semibold leading-snug text-[#8a2c0d] dark:border-persimmon-dark/35 dark:bg-persimmon-dark/10 dark:text-persimmon-dark"><CircleAlert size={15} className="mt-0.5 shrink-0" />{genError}</div>
@@ -655,7 +769,7 @@ export default function AppShell() {
                       <DocLenseLogo size={26} />
                       <div>
                         <p className="font-display text-[13.5px] font-extrabold leading-none text-ink dark:text-text-dark">Ask DocLense</p>
-                        <p className="mt-0.5 text-[9.5px] font-semibold uppercase tracking-widest text-ink-soft/80 dark:text-text-dark-soft/70">Grounded in this document</p>
+                        <p className="mt-0.5 text-[9.5px] font-semibold uppercase tracking-widest text-ink-soft/80 dark:text-text-dark-soft/70">Grounded across {documents.length} {documents.length === 1 ? 'document' : 'documents'}</p>
                       </div>
                     </div>
                     {messages.length > 0 && (
@@ -678,7 +792,11 @@ export default function AppShell() {
                       messages.map(m => (
                         <div key={m.id} className={`flex gap-2 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
                           {m.role === 'assistant' && <DocLenseLogo size={26} className="mt-1 shrink-0" />}
-                          <div className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 font-body text-[14px] leading-relaxed shadow-sm sm:max-w-[78%] ${m.role === 'user' ? 'rounded-tr-md bg-moss text-cream dark:bg-persimmon-dark dark:text-[#2b1206]' : m.isError ? 'rounded-tl-md border border-persimmon/45 bg-persimmon-mist text-[#8a2c0d] dark:border-persimmon-dark/40 dark:bg-persimmon-dark/10 dark:text-persimmon-dark' : 'rounded-tl-md border border-moss/20 bg-paper text-ink dark:border-white/10 dark:bg-panel-dark-2 dark:text-text-dark/95'}`}>{m.content}</div>
+                          <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 font-body text-[14px] leading-relaxed shadow-sm sm:max-w-[78%] ${m.role === 'user' ? 'rounded-tr-md bg-moss text-cream dark:bg-persimmon-dark dark:text-[#2b1206]' : m.isError ? 'rounded-tl-md border border-persimmon/45 bg-persimmon-mist text-[#8a2c0d] dark:border-persimmon-dark/40 dark:bg-persimmon-dark/10 dark:text-persimmon-dark' : 'rounded-tl-md border border-moss/20 bg-paper text-ink dark:border-white/10 dark:bg-panel-dark-2 dark:text-text-dark/95'}`}>
+                            <p className="whitespace-pre-wrap">{m.content}</p>
+                            {m.role === 'assistant' && m.citations?.length ? <CitationChips citations={m.citations} onOpen={openCitation} className="mt-2" /> : null}
+                            {m.role === 'assistant' && m.evidenceStatus === 'unavailable' ? <p className="mt-2 text-[10.5px] font-bold uppercase tracking-wider text-ink-soft dark:text-text-dark-soft">No verified source evidence</p> : null}
+                          </div>
                         </div>
                       ))
                     )}
@@ -698,12 +816,12 @@ export default function AppShell() {
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}
                       maxLength={CHAT_LIMIT}
-                      placeholder="Ask anything about this document…"
-                      aria-label="Ask a question about the document"
+                      placeholder="Ask across the selected documents…"
+                      aria-label="Ask a question about the selected documents"
                       className="min-w-0 flex-1 rounded-2xl border border-moss/25 bg-paper px-4 py-3 font-body text-[14.5px] text-ink outline-none transition placeholder:text-ink-soft/60 focus:border-moss focus:ring-2 focus:ring-moss/20 dark:border-white/12 dark:bg-white/5 dark:text-text-dark dark:placeholder:text-text-dark-soft/50 dark:focus:border-persimmon-dark/60 dark:focus:ring-persimmon-dark/15"
                     />
-                    <button type="submit" disabled={askLoading || !draft.trim()} aria-label="Send question" className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-moss text-cream shadow-[0_3px_0_#0e4740] transition hover:bg-moss-deep disabled:cursor-not-allowed disabled:opacity-50 dark:bg-persimmon-dark dark:text-[#2b1206] dark:shadow-[0_3px_0_#b4532a]">
-                      <Send size={18} strokeWidth={2.2} />
+                    <button type={askLoading ? 'button' : 'submit'} onClick={askLoading ? () => questionAbortRef.current?.abort() : undefined} disabled={!askLoading && !draft.trim()} aria-label={askLoading ? 'Cancel question' : 'Send question'} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-moss text-cream shadow-[0_3px_0_#0e4740] transition hover:bg-moss-deep disabled:cursor-not-allowed disabled:opacity-50 dark:bg-persimmon-dark dark:text-[#2b1206] dark:shadow-[0_3px_0_#b4532a]">
+                      {askLoading ? <X size={18} /> : <Send size={18} strokeWidth={2.2} />}
                     </button>
                   </form>
                 </section>
@@ -725,36 +843,15 @@ export default function AppShell() {
         </AnimatePresence>
       </div>
 
-      {/* ===== full-text reader modal ===== */}
-      <AnimatePresence>
-        {readerOpen && uploaded && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[55] flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center sm:p-6" onClick={() => setReaderOpen(false)} role="dialog" aria-modal="true" aria-label="Full document text">
-            <motion.div initial={{ y: 80, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 60, opacity: 0 }} transition={{ type: 'spring', damping: 28, stiffness: 320 }} className="flex h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl border border-moss/30 bg-cream shadow-2xl dark:border-white/12 dark:bg-panel-dark sm:rounded-3xl" onClick={(e) => e.stopPropagation()}>
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-moss/15 px-5 py-3.5 dark:border-white/10">
-                <div className="flex min-w-0 items-center gap-2.5">
-                  <FileText size={17} className="shrink-0 text-moss dark:text-gold-dark" />
-                  <p className="truncate font-display text-[13.5px] font-bold text-ink dark:text-text-dark">{uploaded.fileName}</p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <button onClick={() => setHighlightKeywords(v => !v)} role="switch" aria-checked={highlightKeywords} className="flex items-center gap-2 rounded-xl border border-moss/30 px-2.5 py-1.5 text-[10.5px] font-extrabold uppercase tracking-wide text-moss-deep transition hover:bg-moss-mist dark:border-white/15 dark:text-gold-dark dark:hover:bg-white/5">
-                    <span className={`relative h-4 w-7 rounded-full transition-colors ${highlightKeywords ? 'bg-gold' : 'bg-moss/25 dark:bg-white/15'}`}><span className={`absolute top-0.5 h-3 w-3 rounded-full bg-cream shadow transition-all ${highlightKeywords ? 'left-3.5' : 'left-0.5'}`} /></span>
-                    Keywords
-                  </button>
-                  <button onClick={() => setReaderOpen(false)} className="rounded-xl p-2 text-ink-soft transition hover:bg-moss-mist hover:text-ink dark:text-text-dark-soft dark:hover:bg-white/5" aria-label="Close reader"><X size={18} /></button>
-                </div>
-              </div>
-              <div className="flex-1 overflow-y-auto px-6 py-5">
-                <p className="whitespace-pre-wrap font-body text-[15px] leading-[1.8] text-ink dark:text-text-dark/95">
-                  {highlightKeywords
-                    ? highlightMatches(uploaded.text.slice(0, 60000), kwForReader).map((part, i) => part.highlight ? <mark key={i} className="kw-highlight">{part.text}</mark> : <span key={i}>{part.text}</span>)
-                    : uploaded.text}
-                </p>
-              </div>
-              <div className="border-t border-moss/15 px-5 py-2.5 text-center text-[10.5px] font-semibold text-ink-soft/80 dark:border-white/10 dark:text-text-dark-soft/70">Showing the first 60,000 characters{highlightKeywords ? ' · highlighted in gold' : ''} · {uploaded.stats.words.toLocaleString()} words total</div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <DocumentReader
+        documents={documents}
+        open={readerOpen}
+        activeCitation={activeCitation}
+        keywords={kwForReader}
+        highlightKeywords={highlightKeywords}
+        onToggleKeywords={() => setHighlightKeywords(value => !value)}
+        onClose={() => { setReaderOpen(false); setActiveCitation(null) }}
+      />
     </div>
   )
 }

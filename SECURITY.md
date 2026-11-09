@@ -1,40 +1,23 @@
-# Security
+# DocLense security policy
 
-## Data handling
+## Data flow and secrets
 
-- Groq API keys are held in React memory only. They are never written to localStorage, sessionStorage, build-time environment variables, logs, or the document history.
-- Legacy `doclense.groq-key`, `doclense.groq-key-saved`, and `doclense.history.v1` values are removed when the Studio loads.
-- Recent analyses are held in memory for the current page session only and disappear on reload.
-- Document text is parsed locally and only the bounded model context is sent directly to Groq when the user requests analysis or asks a question.
+- The Groq key is held only in React memory. It is not written to local/session storage, build-time environment variables, history, logs, or exports.
+- Documents, analyses, and chat are tab-memory data. Reloading clears them. Theme and non-sensitive analysis settings may persist locally.
+- PDF parsing, statistics, retrieval, citation matching, and optional OCR run in the browser. OCR worker, model, and WASM assets are served from the DocLense origin.
+- Starting analysis or Q&A sends the selected bounded document context and user instruction directly to `https://api.groq.com`. DocLense has no backend proxy.
 
-## Untrusted input boundaries
+## Security boundaries
 
-- PDF uploads require a valid PDF header and are limited by file size, page count, extracted characters, canvas pixels, processing time, and cancellation.
-- Plain-text uploads reject binary NUL content and documents above the character limit.
-- Uploaded documents are serialized as untrusted data in model requests. Instruction-like content triggers a user warning. This reduces prompt-injection risk but cannot guarantee model correctness; important output must be checked against the source.
-- Model output is bounded and rendered through React text nodes. Do not introduce raw HTML rendering for document or model content.
+- File type/signature, size, page, extracted-character, canvas-pixel, OCR, timeout, retry, and concurrency limits bound resource use.
+- Document text is labeled untrusted in model prompts. Instruction-like content raises a visible warning. This reduces but cannot eliminate indirect prompt injection.
+- AI output is schema-validated and rendered as React text. Raw HTML rendering is prohibited by regression checks.
+- Exact cited excerpts must resolve to their named source. Claim support remains a heuristic and is visibly classified as verified or uncertain.
+- CSP restricts connections to the DocLense origin and Groq, denies framing/plugins, and limits workers. Equivalent policies are provided in `vercel.json`, `public/_headers`, and the HTML fallback CSP.
+- Requests omit browser credentials and referrers. Provider error bodies are not displayed.
 
-## Deployment
+## Verification and disclosure
 
-The repository includes equivalent security policies for:
+Run `npm run check`, `npm run audit:prod`, and `npm run test:e2e` before release. Validate response headers against the production URL with `DEPLOYMENT_URL=https://… npm run test:headers`.
 
-- Vercel in `vercel.json`.
-- Static hosts that support a `_headers` file in `public/_headers`.
-- A CSP fallback meta element in `index.html`.
-
-If deploying elsewhere, configure the same CSP, frame denial, MIME sniffing protection, referrer policy, permissions policy, and HSTS at the edge or web server. Header-based `frame-ancestors 'none'` is required; a CSP meta element cannot enforce `frame-ancestors`.
-
-## Verification
-
-Before release, run:
-
-```bash
-npm ci
-npm run lint
-npm test
-npm run build
-npm audit --audit-level=low
-npm audit signatures
-```
-
-The security regression suite covers prompt boundaries, suspicious-document detection, file signatures and limits, settings normalization, and memory-only history. The cross-origin browser regression additionally verifies that obsolete Arena messages are ignored, legacy sensitive storage is purged, no recorder is loaded, and API keys are not persisted.
+The evidence-backed register, including residual risk and release-blocker rules, is in [docs/security-findings.md](docs/security-findings.md). This project does not claim to be vulnerability-free. Report a suspected vulnerability privately to the repository owner rather than opening a public exploit report.

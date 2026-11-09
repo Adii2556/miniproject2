@@ -1,10 +1,13 @@
 import * as pdfjsLib from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import type { SourceBlock } from './document'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl as string
 
 export interface PdfExtractResult {
   text: string
+  pageTexts: string[]
+  blocks: SourceBlock[]
   pageCount: number
   firstPageDataUrl: string | null
 }
@@ -37,7 +40,7 @@ function safeViewportScale(width: number, height: number): number {
 }
 
 /** Extract bounded text and a bounded first-page thumbnail from a PDF. */
-export async function extractPdf(buffer: ArrayBuffer, signal?: AbortSignal): Promise<PdfExtractResult> {
+export async function extractPdf(buffer: ArrayBuffer, signal?: AbortSignal, documentId = 'pdf-1', fileName = 'Document.pdf'): Promise<PdfExtractResult> {
   const startedAt = performance.now()
   const task = pdfjsLib.getDocument({
     data: buffer.slice(0),
@@ -54,6 +57,7 @@ export async function extractPdf(buffer: ArrayBuffer, signal?: AbortSignal): Pro
     }
 
     const parts: string[] = []
+    const blocks: SourceBlock[] = []
     let extractedChars = 0
     for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
       assertWithinBudget(startedAt, signal)
@@ -71,7 +75,16 @@ export async function extractPdf(buffer: ArrayBuffer, signal?: AbortSignal): Pro
             throw new PdfSafetyError('This PDF contains too much extracted text. The safety limit is 1,000,000 characters.')
           }
         }
-        parts.push(pageText.replace(/[ \t]+/g, ' ').trim())
+        const normalized = pageText.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
+        parts.push(normalized)
+        blocks.push({
+          id: `${documentId}:p${pageNumber}`,
+          documentId,
+          documentName: fileName,
+          label: `${fileName} · Page ${pageNumber}`,
+          pageNumber,
+          text: normalized,
+        })
       } finally {
         page.cleanup()
       }
@@ -102,7 +115,7 @@ export async function extractPdf(buffer: ArrayBuffer, signal?: AbortSignal): Pro
       firstPageDataUrl = null
     }
 
-    return { text: parts.join('\n\n'), pageCount, firstPageDataUrl }
+    return { text: parts.join('\n\n'), pageTexts: parts, blocks, pageCount, firstPageDataUrl }
   } finally {
     await task.destroy()
   }

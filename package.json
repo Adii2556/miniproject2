@@ -8,20 +8,31 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "test:headers": "playwright test tests/e2e/security-headers.spec.ts",
+    "check:security": "node scripts/security-check.mjs",
+    "audit:prod": "node scripts/audit-prod.mjs",
+    "check": "npm run lint && npm run test && npm run build && npm run check:security"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.1",
+    "@tesseract.js-data/eng": "^1.0.0",
     "framer-motion": "^12.35.0",
+    "jspdf": "^4.2.1",
     "lucide-react": "^0.577.0",
     "pdfjs-dist": "^6.4.299",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.18.5",
-    "tailwindcss": "^4.2.1"
+    "tailwindcss": "^4.2.1",
+    "tesseract.js": "^7.0.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.64.1",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",

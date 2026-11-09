@@ -8,6 +8,9 @@ const settings: AnalysisSettings = {
   summaryStyle: 'concise',
   language: 'English',
   readingLevel: 'professional',
+  analysisMode: 'sampled',
+  maxChunks: 8,
+  quizDifficulty: 'adaptive',
 }
 
 describe('Groq prompt boundaries', () => {

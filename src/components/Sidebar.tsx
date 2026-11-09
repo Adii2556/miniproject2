@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import {
   Eye, EyeOff, ChevronDown, KeyRound, ExternalLink, Cpu, Flame, Rows3, AlignLeft,
   Languages, GraduationCap, RotateCcw, History, Trash2, FileText, X, CheckCircle2, Zap,
+  ScanSearch, BrainCircuit,
 } from 'lucide-react'
 import { GROQ_MODELS, SUPPORTED_LANGUAGES, type AnalysisSettings } from '../lib/groq'
 import DocLenseLogo from './DocLenseLogo'
@@ -109,9 +110,46 @@ export default function Sidebar(props: SidebarProps) {
               </div>
               <div className="mt-2.5 flex items-start justify-between gap-3">
                 <p className="max-w-[185px] text-[10.5px] font-medium leading-relaxed text-text-dark-soft">Kept in memory only. Reloading or closing this tab clears it.</p>
-                <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-bold text-gold-dark underline-offset-2 transition hover:text-gold hover:underline">Get a free key<ExternalLink size={10} /></a>
+                <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-bold text-gold-dark underline-offset-2 transition hover:text-gold hover:underline">Manage Groq keys<ExternalLink size={10} /></a>
               </div>
             </div>
+          </section>
+
+          {/* ---------- COVERAGE & BUDGET ---------- */}
+          <section className="space-y-2.5">
+            <SectionLabel><ScanSearch size={11} className="-ml-4 mr-0.5 inline" />Document coverage</SectionLabel>
+            <div className="grid grid-cols-2 gap-1.5 rounded-2xl border border-white/10 bg-black/25 p-1.5" role="radiogroup" aria-label="Analysis coverage mode">
+              {([['sampled', 'Sampled'], ['complete', 'Complete']] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={settings.analysisMode === value}
+                  disabled={disabled}
+                  onClick={() => updateSettings({ analysisMode: value, maxChunks: value === 'complete' ? Math.max(settings.maxChunks, 24) : Math.min(settings.maxChunks, 12) })}
+                  className={`rounded-xl px-2 py-2 text-[11.5px] font-bold transition ${settings.analysisMode === value ? 'bg-persimmon-dark text-[#2b1206] shadow' : 'text-text-dark-soft hover:bg-white/5 hover:text-text-dark'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="px-1 text-[10.5px] font-medium leading-relaxed text-text-dark-soft/80">{settings.analysisMode === 'complete' ? 'Includes every extracted chunk if it fits the explicit budget.' : 'Samples evenly across every document for lower latency and API use.'}</p>
+            <div className="flex items-center justify-between px-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-text-dark-soft">Chunk budget</span>
+              <span className="rounded-lg border border-gold-dark/25 bg-gold-dark/10 px-2 py-0.5 font-mono text-[11px] font-bold text-gold-dark">{settings.maxChunks} · ≤{Math.ceil(settings.maxChunks / 2) + 2} requests</span>
+            </div>
+            <input
+              type="range"
+              min={2}
+              max={40}
+              step={2}
+              value={settings.maxChunks}
+              disabled={disabled}
+              onChange={event => updateSettings({ maxChunks: Number(event.target.value) })}
+              aria-label="Maximum document chunks"
+              className="doclense-range w-full"
+              style={{ ['--fill' as string]: `${((settings.maxChunks - 2) / 38) * 100}%` }}
+            />
           </section>
 
           {/* ---------- MODEL ---------- */}
@@ -185,6 +223,25 @@ export default function Sidebar(props: SidebarProps) {
                   {label}
                 </button>
               ))}
+            </div>
+          </section>
+
+          <section className="space-y-2">
+            <SectionLabel><BrainCircuit size={11} className="-ml-4 mr-0.5 inline" />Quiz difficulty</SectionLabel>
+            <div className="relative">
+              <select
+                value={settings.quizDifficulty}
+                disabled={disabled}
+                onChange={event => updateSettings({ quizDifficulty: event.target.value as AnalysisSettings['quizDifficulty'] })}
+                aria-label="Quiz difficulty"
+                className="w-full appearance-none rounded-xl border border-white/12 bg-black/30 py-2.5 pl-3 pr-8 text-[12px] font-semibold text-text-dark outline-none focus:border-persimmon-dark/60 disabled:opacity-60"
+              >
+                <option value="adaptive" className="bg-panel-dark">Adaptive mix</option>
+                <option value="easy" className="bg-panel-dark">Easy</option>
+                <option value="medium" className="bg-panel-dark">Medium</option>
+                <option value="hard" className="bg-panel-dark">Hard</option>
+              </select>
+              <ChevronDown size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-text-dark-soft" />
             </div>
           </section>
 

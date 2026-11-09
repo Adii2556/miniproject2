@@ -2,13 +2,16 @@ import { useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { FileQuestion, Check, X, RotateCcw, Trophy, Lightbulb } from 'lucide-react'
 import type { QuizQuestion } from '../lib/groq'
+import type { Citation } from '../lib/document'
+import CitationChips from './CitationChips'
 
 interface QuizCardProps {
   quiz: QuizQuestion[]
   onToast: (msg: string) => void
+  onOpenCitation: (citation: Citation) => void
 }
 
-export default function QuizCard({ quiz, onToast }: QuizCardProps) {
+export default function QuizCard({ quiz, onToast, onOpenCitation }: QuizCardProps) {
   const [answers, setAnswers] = useState<Record<number, number>>({})
   const total = quiz.length
   const answeredCount = Object.keys(answers).length
@@ -59,7 +62,10 @@ export default function QuizCard({ quiz, onToast }: QuizCardProps) {
             const locked = chosen !== undefined
             return (
               <li key={qi}>
-                <p className="font-body text-[15px] font-semibold leading-snug text-ink dark:text-text-dark"><span className="mr-1.5 font-mono text-xs font-bold text-persimmon dark:text-persimmon-dark">Q{qi + 1}.</span>{q.question}</p>
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <p className="font-body text-[15px] font-semibold leading-snug text-ink dark:text-text-dark"><span className="mr-1.5 font-mono text-xs font-bold text-persimmon dark:text-persimmon-dark">Q{qi + 1}.</span>{q.question}</p>
+                  <span className="rounded-lg border border-moss/20 px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider text-ink-soft dark:border-white/12 dark:text-text-dark-soft">{q.difficulty}</span>
+                </div>
                 <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
                   {q.options.map((option, oi) => {
                     const isAnswer = oi === q.answer
@@ -89,9 +95,10 @@ export default function QuizCard({ quiz, onToast }: QuizCardProps) {
                 </div>
                 <AnimatePresence>
                   {locked && q.explanation && (
-                    <motion.p initial={{ opacity: 0, height: 0, marginTop: 0 }} animate={{ opacity: 1, height: 'auto', marginTop: 8 }} exit={{ opacity: 0, height: 0 }} className="flex items-start gap-1.5 overflow-hidden font-body text-[13px] italic leading-snug text-ink-soft dark:text-text-dark-soft">
-                      <Lightbulb size={13} className="mt-0.5 shrink-0 text-gold" />{q.explanation}
-                    </motion.p>
+                    <motion.div initial={{ opacity: 0, height: 0, marginTop: 0 }} animate={{ opacity: 1, height: 'auto', marginTop: 8 }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                      <p className="flex items-start gap-1.5 font-body text-[13px] italic leading-snug text-ink-soft dark:text-text-dark-soft"><Lightbulb size={13} className="mt-0.5 shrink-0 text-gold" />{q.explanation}</p>
+                      <CitationChips citations={q.citations} onOpen={onOpenCitation} className="mt-2" />
+                    </motion.div>
                   )}
                 </AnimatePresence>
               </li>

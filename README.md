@@ -1,65 +1,48 @@
-# DocLense · Document Analysis Studio
+# DocLense · Evidence-first document intelligence
 
-> Fast, chat-style document intelligence powered by Groq LPUs. Drop in any PDF or text file and get instant summaries, key takeaways, topical keywords, sentiment analysis, document statistics, a self-scoring comprehension quiz, and grounded Q&A.
+DocLense is a browser-based workspace for analyzing up to six PDF or text documents with source-linked summaries, cross-document questions, evidence-grounded quizzes, and exportable reports. PDF extraction, statistics, retrieval, citation checks, and optional OCR run locally. Only a bounded document context is sent to Groq after the user starts analysis or asks a question.
 
----
+## What is implemented
 
-## ✨ Features
+- Page/paragraph source models, overlapping chunks, exact-quote citation checks, and claim-support confidence labels.
+- Complete mode with a hard request/chunk budget, plus an explicitly disclosed sampled mode with a coverage percentage.
+- BM25-style lexical retrieval over the full workspace for cross-document Q&A.
+- Up to six documents per workspace with source-distinct citations and reader navigation.
+- Opt-in English OCR for image-only PDFs, locally executed and bounded to 10 pages and 2.5 million pixels per page.
+- Zod-validated AI responses, one bounded repair attempt, timeouts, cancellation, and rate-limit-friendly concurrency.
+- Quiz difficulty controls, cited explanations, reliable local scoring, and TXT, Markdown, or PDF report exports.
+- Memory-only API keys, documents, analyses, and chat; no DocLense backend or database.
 
-- **Client-Side Document Parsing**: Decode PDFs directly in your browser using `pdfjs-dist` Web Workers, alongside support for `.txt`, `.md`, and `.text` files up to 15 MB.
-- **Customizable Generation**: Select exactly what to generate before running analysis:
-  - **Summary**: Choose between *Concise*, *Executive*, or *Detailed* briefs.
-  - **Key Points**: 5 to 7 crisp takeaways and central arguments.
-  - **Keywords**: 8 to 12 topical tags for rapid scanning with in-reader highlighting.
-  - **Sentiment Analysis**: Polarity gauge ($-100$ to $+100$), confidence score, and tone tags.
-  - **Comprehension Quiz**: Self-scoring 10-question multiple-choice test with instant scoring and explanations.
-- **Document Statistics & Readability**: In-depth statistics including word count, character count, sentence count, paragraph count, estimated reading time at 225 wpm, and lexicon diversity.
-- **Grounded Q&A Chat**: Ask follow-up questions about the document in an interactive chat feed with quick-prompt suggestions.
-- **Export**: One-click download of the complete analysis report as a `.txt` file.
-- **Modern UI & Themes**: Tactile aesthetic with paper grain textures, dark/light theme switching, and custom typography (Bricolage Grotesque + Fraunces + Inter + JetBrains Mono).
+See [Architecture](docs/architecture.md), [Comparison and implementation plan](docs/comparison-and-plan.md), [Security findings](docs/security-findings.md), and [Benchmark protocol](docs/benchmark.md).
 
----
+## Run locally
 
-## 🛠️ Tech Stack
-
-- **Framework**: React 19, TypeScript
-- **Bundler & Tooling**: Vite 7
-- **Styling**: Tailwind CSS v4 (`@tailwindcss/vite`)
-- **PDF Engine**: `pdfjs-dist`
-- **Animations & Icons**: Framer Motion, `lucide-react`
-- **AI Inference**: Groq Cloud REST API (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`)
-
----
-
-## 🚀 Getting Started
-
-### 1. Clone the repository
 ```bash
-git clone https://github.com/Adii2556/miniproject2.git
-cd miniproject2
-```
-
-### 2. Install dependencies
-```bash
-npm install
-```
-
-### 3. Add your Groq API key
-Open the Studio and paste a personal Groq API key into the sidebar. The key is held in memory only and is cleared when the tab reloads or closes. Do not put shared secrets in `VITE_*` environment variables because Vite embeds them in public browser assets.
-
-### 4. Run Development Server
-```bash
+npm ci
 npm run dev
 ```
 
-### 5. Build for Production
+Open the Studio, paste a personal Groq API key, and upload PDF, TXT, Markdown, or text files. Never put a shared secret in a `VITE_*` variable: Vite exposes those values in browser assets.
+
+## Verification
+
 ```bash
-npm run build
+npm run check
+npm run audit:prod
+npm run test:e2e
 ```
 
-## Security notes
+The browser suite runs desktop and mobile projects. `npm run test:headers` checks an actual deployment only when `DEPLOYMENT_URL` is set.
 
-- Production preview instrumentation and session recording are intentionally excluded.
-- Recent analyses exist only in memory for the current tab and are not persisted.
-- Uploaded documents are treated as untrusted model context, but AI output can still be incorrect. Review important results against the source.
-- Deployment headers are provided for Vercel (`vercel.json`) and `_headers`-compatible static hosts (`public/_headers`).
+## Operational limits
+
+- 15 MB per file; up to six documents per workspace.
+- PDF extraction is bounded by page, character, canvas-pixel, and time limits.
+- Complete mode refuses work that exceeds its configured budget instead of silently dropping sections.
+- OCR is English-only, may be inaccurate, and processes at most the first 10 pages.
+- Exact quotation can be verified mechanically; whether evidence truly entails a claim is estimated lexically and marked verified or uncertain. Important decisions still require human source review.
+- Groq receives the selected document context, question/instructions, and the user's API key in the request authorization header. Groq's availability, retention, rate limits, and model behavior are outside this repository's control.
+
+## Stack
+
+React 19, strict TypeScript, Vite 7, Tailwind CSS 4, pdf.js, Tesseract.js, Zod, jsPDF, Vitest, and Playwright.

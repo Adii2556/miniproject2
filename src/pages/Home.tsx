@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   ArrowRight, UploadCloud, Sparkles, ListChecks, Tags, Gauge, FileQuestion,
-  ShieldCheck, Keyboard, Zap, Timer, BadgeCheck, Quote, Star, BookOpenCheck,
+  ShieldCheck, Keyboard, Zap, Timer, BadgeCheck, Quote, BookOpenCheck,
 } from 'lucide-react'
 import MarketingNav from '../components/MarketingNav'
 import DocLenseLogo from '../components/DocLenseLogo'
@@ -29,7 +29,7 @@ export default function Home() {
       <MarketingNav />
 
       {/* ============ HERO ============ */}
-      <section className="relative overflow-hidden">
+      <section id="main-content" tabIndex={-1} className="relative overflow-hidden">
         <img src="/images/doclense-nook-dark.png" alt="" aria-hidden className="pointer-events-none absolute inset-y-0 right-0 h-full w-full object-cover opacity-[0.16] dark:opacity-45 md:w-[62%]" style={{ maskImage: 'linear-gradient(to left, black 40%, transparent 100%)', WebkitMaskImage: 'linear-gradient(to left, black 40%, transparent 100%)' }} />
         <div className="pointer-events-none absolute -left-40 top-24 h-96 w-96 rounded-full bg-moss-mist/70 blur-3xl dark:bg-moss/10" />
 
@@ -50,7 +50,7 @@ export default function Home() {
             </motion.h1>
 
             <motion.p {...fadeUp} transition={{ duration: 0.6, delay: 0.16 }} className="mt-6 max-w-xl font-body text-lg leading-relaxed text-ink-soft dark:text-text-dark-soft sm:text-xl">
-              Drop in a <span className="font-semibold text-ink dark:text-text-dark">PDF or TXT</span> and get a friendly, chat-style analysis — summary, key points, keywords, sentiment, a scored quiz, and hard document stats. In seconds.
+              Add one or more <span className="font-semibold text-ink dark:text-text-dark">PDF or text documents</span> and get evidence-linked summaries, cross-document Q&amp;A, a scored quiz, and transparent coverage controls.
             </motion.p>
 
             <motion.div {...fadeUp} transition={{ duration: 0.6, delay: 0.24 }} className="mt-8 flex flex-wrap items-center gap-3">
@@ -65,7 +65,7 @@ export default function Home() {
             </motion.div>
 
             <motion.div {...fadeUp} transition={{ duration: 0.6, delay: 0.32 }} className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs font-semibold text-ink-soft dark:text-text-dark-soft">
-              {['No account needed', 'Runs in your browser', 'Your key stays on your device'].map(t => (
+              {['No DocLense account', 'Local document extraction', 'Key held in tab memory'].map(t => (
                 <span key={t} className="inline-flex items-center gap-1.5"><BadgeCheck size={14} className="text-moss dark:text-persimmon-dark" />{t}</span>
               ))}
             </motion.div>
@@ -114,7 +114,7 @@ export default function Home() {
         {/* stat strip */}
         <div className="relative border-y border-moss/15 bg-moss-deep text-cream dark:border-white/10 dark:bg-panel-dark">
           <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-center gap-x-10 gap-y-2 px-4 py-3 text-center sm:justify-between sm:px-6">
-            {[['~10×', 'faster than manual review'], ['4', 'models on tap'], ['6', 'insights in one pass'], ['100%', 'in-browser, private']].map(([n, d]) => (
+            {[['Exact', 'source excerpts'], ['2', 'coverage modes'], ['3', 'export formats'], ['0', 'stored API keys']].map(([n, d]) => (
               <div key={n} className="flex items-baseline gap-2"><span className="font-display text-xl font-extrabold text-gold-dark">{n}</span><span className="text-[11px] font-semibold uppercase tracking-wider text-cream/80">{d}</span></div>
             ))}
           </div>
@@ -124,17 +124,17 @@ export default function Home() {
       {/* ============ FEATURES ============ */}
       <section id="features" className="relative mx-auto max-w-7xl scroll-mt-24 px-4 py-16 sm:px-6 md:py-24">
         <div className="max-w-2xl">
-          <p className="font-sans text-xs font-extrabold uppercase tracking-[0.2em] text-persimmon dark:text-persimmon-dark">Everything, one upload</p>
-          <h2 className="mt-3 font-display text-3xl font-extrabold tracking-tight text-ink dark:text-text-dark sm:text-5xl">Six superpowers, <span className="font-serif italic text-moss dark:text-gold-dark">zero busywork.</span></h2>
-          <p className="mt-4 font-body text-lg text-ink-soft dark:text-text-dark-soft">Pick exactly what you want — summary, takeaways, quiz and more — with checkboxes after upload. DocLense only generates what you tick.</p>
+          <p className="font-sans text-xs font-extrabold uppercase tracking-[0.2em] text-persimmon dark:text-persimmon-dark">Evidence before confidence</p>
+          <h2 className="mt-3 font-display text-3xl font-extrabold tracking-tight text-ink dark:text-text-dark sm:text-5xl">Useful analysis, <span className="font-serif italic text-moss dark:text-gold-dark">with receipts.</span></h2>
+          <p className="mt-4 font-body text-lg text-ink-soft dark:text-text-dark-soft">Choose only the outputs you need. DocLense checks quoted evidence locally, marks uncertain support, and opens the exact source section in one click.</p>
         </div>
         <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[
-            { icon: Sparkles, title: 'Summary & suggested title', body: 'A clean, readable brief plus a confident title the document might have deserved. Tune concision, reading level and language.', tint: 'bg-persimmon-mist text-persimmon dark:bg-persimmon-dark/15 dark:text-persimmon-dark' },
-            { icon: ListChecks, title: 'Key points', body: 'Five to seven crisp takeaways you can paste into a standup or lecture — no digging for the signal.', tint: 'bg-moss-mist text-moss-deep dark:bg-moss/25 dark:text-[#7fd6c2]' },
-            { icon: Tags, title: 'Keywords & topics', body: 'Frequency- and meaning-based keywords, highlighted right inside the full-text reader so context is one click away.', tint: 'bg-[#f4ead0] text-[#8a5b0e] dark:bg-gold-dark/15 dark:text-gold-dark' },
-            { icon: Gauge, title: 'Sentiment, scored', body: 'A −100…+100 polarity gauge with confidence and tone adjectives — hopeful, skeptical, urgent, whatever is true.', tint: 'bg-[#e7e3f7] text-[#5246b0] dark:bg-[#8f83ff]/15 dark:text-[#b3a8ff]' },
-            { icon: FileQuestion, title: 'A scored quiz', body: 'Ten grounded multiple-choice questions with instant scoring, explanations, and a shareable score card.', tint: 'bg-[#fbe3ef] text-[#b0306f] dark:bg-[#ff8ac2]/15 dark:text-[#ff9dcb]' },
+            { icon: Sparkles, title: 'Evidence-linked summaries', body: 'A readable brief with exact page or paragraph excerpts. Tune concision, reading level, output language, and coverage.', tint: 'bg-persimmon-mist text-persimmon dark:bg-persimmon-dark/15 dark:text-persimmon-dark' },
+            { icon: ListChecks, title: 'Source-backed key points', body: 'Each takeaway retains source identity across PDFs and text files, so comparison never erases provenance.', tint: 'bg-moss-mist text-moss-deep dark:bg-moss/25 dark:text-[#7fd6c2]' },
+            { icon: Tags, title: 'Retrieval & keywords', body: 'Practical lexical ranking searches the extracted workspace, while keywords remain highlighted in the evidence reader.', tint: 'bg-[#f4ead0] text-[#8a5b0e] dark:bg-gold-dark/15 dark:text-gold-dark' },
+            { icon: Gauge, title: 'Tone, with limits', body: 'A bounded polarity and confidence estimate. Treat it as an interpretation, not an objective measurement.', tint: 'bg-[#e7e3f7] text-[#5246b0] dark:bg-[#8f83ff]/15 dark:text-[#b3a8ff]' },
+            { icon: FileQuestion, title: 'Evidence-grounded quiz', body: 'Configurable difficulty, instant scoring, explanations, and source excerpts for every retained question.', tint: 'bg-[#fbe3ef] text-[#b0306f] dark:bg-[#ff8ac2]/15 dark:text-[#ff9dcb]' },
             { icon: Timer, title: 'Real document stats', body: 'Words, characters, sentences, paragraphs, vocabulary diversity and reading time at 225 wpm — computed locally, instantly.', tint: 'bg-[#e0f0ea] text-[#146b4f] dark:bg-[#4be0a8]/10 dark:text-[#5fe0aa]' },
           ].map(({ icon: Icon, title, body, tint }) => (
             <div key={title} className="group rounded-3xl border border-moss/15 bg-cream p-6 shadow-sm transition duration-300 hover:-translate-y-1 hover:border-moss/30 hover:shadow-xl dark:border-white/10 dark:bg-panel-dark dark:hover:border-persimmon-dark/30">
@@ -153,9 +153,9 @@ export default function Home() {
           <h2 className="mt-3 font-display text-3xl font-extrabold tracking-tight text-ink dark:text-text-dark sm:text-5xl">From file to understanding<br />in <span className="font-serif italic text-moss dark:text-gold-dark">three breaths.</span></h2>
           <div className="mt-12 grid gap-6 md:grid-cols-3">
             {[
-              { n: '01', icon: UploadCloud, title: 'Drop it in', body: 'Drag a PDF or TXT onto the dropzone — or sample one of six built-in documents. Invalid or empty files get a friendly, specific error, never a stack trace.' },
+              { n: '01', icon: UploadCloud, title: 'Build a workspace', body: 'Add up to six PDFs or text files. Image-only PDFs can use opt-in, bounded local English OCR with explicit accuracy limits.' },
               { n: '02', icon: ListChecks, title: 'Choose your dishes', body: 'After upload you tick exactly what you want: summary, key points, keywords, sentiment, quiz. Nothing is generated behind your back.' },
-              { n: '03', icon: Zap, title: 'Read at the top', body: 'Results are pinned above the input — title first — so you never get yanked to the bottom of the page after generating. Copy, download, quiz yourself.' },
+              { n: '03', icon: Zap, title: 'Inspect the evidence', body: 'Open exact excerpts, compare source files, ask across the workspace, and export cited reports as TXT, Markdown, or PDF.' },
             ].map(({ n, icon: Icon, title, body }) => (
               <div key={n} className="relative overflow-hidden rounded-3xl border border-moss/20 bg-cream p-7 dark:border-white/10 dark:bg-panel-dark">
                 <span className="pointer-events-none absolute -right-2 -top-4 font-display text-[88px] font-extrabold leading-none text-moss/10 dark:text-white/5">{n}</span>
@@ -173,9 +173,9 @@ export default function Home() {
         <div className="overflow-hidden rounded-[2rem] border border-moss/25 bg-gradient-to-br from-moss-deep via-moss to-moss-deep p-8 text-cream shadow-2xl dark:border-persimmon-dark/20 dark:from-panel-dark dark:via-moss-night dark:to-panel-dark md:p-12">
           <div className="grid items-center gap-8 md:grid-cols-12">
             <div className="md:col-span-8">
-              <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold uppercase tracking-widest text-gold-dark"><ShieldCheck size={14} /> Privacy by architecture</div>
-              <h2 className="mt-4 font-display text-3xl font-extrabold leading-tight md:text-4xl">Your document never touches our servers —<br />because we don’t have any.</h2>
-              <p className="mt-4 max-w-2xl font-body text-lg leading-relaxed text-cream/85">PDFs are parsed in your browser. Stats are computed locally. Your Groq API key stays in this tab's memory, and requests go straight to Groq’s API. There is no DocLense backend or database.</p>
+              <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold uppercase tracking-widest text-gold-dark"><ShieldCheck size={14} /> Explicit data boundaries</div>
+              <h2 className="mt-4 font-display text-3xl font-extrabold leading-tight md:text-4xl">Local extraction.<br />Direct, disclosed AI requests.</h2>
+              <p className="mt-4 max-w-2xl font-body text-lg leading-relaxed text-cream/85">PDF parsing, OCR, statistics, citation matching, and history stay in this tab. When you generate or ask a question, bounded document excerpts and your API key go directly to Groq. DocLense has no backend or database.</p>
             </div>
             <div className="md:col-span-4">
               <div className="rounded-2xl border border-white/15 bg-black/20 p-5 font-mono text-[12px] leading-6 text-gold-dark/95">
@@ -190,22 +190,18 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ============ TESTIMONIAL ============ */}
+      {/* ============ PRODUCT PRINCIPLE ============ */}
       <section className="mx-auto max-w-4xl px-4 pb-8 text-center sm:px-6">
         <Quote size={34} className="mx-auto text-persimmon/70 dark:text-persimmon-dark/70" fill="currentColor" />
-        <p className="mt-5 font-serif text-2xl font-medium italic leading-snug text-ink dark:text-text-dark sm:text-3xl">“I fed DocLense a 60-page grant proposal on a Tuesday night. By Wednesday morning I had the argument, the risks, and the quiz I needed to brief my board — all before my coffee cooled.”</p>
-        <div className="mt-6 flex items-center justify-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-moss font-display text-sm font-bold text-cream dark:bg-persimmon-dark dark:text-[#2b1206]">MK</div>
-          <div className="text-left"><p className="font-sans text-sm font-bold text-ink dark:text-text-dark">Maya Krishnamurthy</p><p className="text-xs text-ink-soft dark:text-text-dark-soft">Head of Programs · Lumen Foundation</p></div>
-        </div>
-        <div className="mt-5 flex items-center justify-center gap-1 text-gold">{[...Array(5)].map((_, i) => <Star key={i} size={16} fill="currentColor" />)}</div>
+        <p className="mt-5 font-serif text-2xl font-medium italic leading-snug text-ink dark:text-text-dark sm:text-3xl">A useful answer should show what it read, where it found it, and when the evidence is not strong enough.</p>
+        <p className="mt-4 text-xs font-extrabold uppercase tracking-[0.2em] text-ink-soft dark:text-text-dark-soft">DocLense product principle</p>
       </section>
 
       {/* ============ CTA ============ */}
       <section className="mx-auto max-w-7xl px-4 pb-16 pt-10 sm:px-6">
         <div className="text-center">
           <BookOpenCheck size={40} className="mx-auto text-moss dark:text-persimmon-dark" strokeWidth={1.8} />
-          <h2 className="mt-4 font-display text-3xl font-extrabold tracking-tight text-ink dark:text-text-dark sm:text-5xl">Your next document is<br />already understood.</h2>
+          <h2 className="mt-4 font-display text-3xl font-extrabold tracking-tight text-ink dark:text-text-dark sm:text-5xl">Your next document is<br />ready for closer reading.</h2>
           <Link to="/app" className="mt-8 inline-flex items-center gap-2 rounded-2xl bg-persimmon px-8 py-4 font-sans text-lg font-bold text-cream shadow-[0_4px_0_#b93a17] transition hover:bg-persimmon-soft active:translate-y-0.5 dark:bg-persimmon-dark dark:text-[#2b1206] dark:shadow-[0_4px_0_#b4532a]">
             Open the Studio <ArrowRight size={20} strokeWidth={2.5} />
           </Link>
