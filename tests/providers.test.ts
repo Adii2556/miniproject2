@@ -3,6 +3,7 @@ import {
   discoverProviderModels,
   normalizeModelCatalog,
   runProviderCompletion,
+  testProviderModel,
   type AIExecutionConfig,
 } from '../src/lib/aiProviders'
 import { handleAIRequest, proxyAIRequest } from '../server/aiProxy'
@@ -44,6 +45,33 @@ describe('provider discovery and compatibility', () => {
     expect(headers['X-DocLense-Provider-Key']).toBe('sk-test')
     expect(headers['X-DocLense-Request']).toBe('1')
     expect((fetchMock.mock.calls[0][1] as RequestInit).credentials).toBe('omit')
+  })
+
+  test('sends a gateway-valid lightweight compatibility request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: '{"compatible":true}' } }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await testProviderModel({
+      provider: 'nvidia',
+      apiKey: 'nvapi-test',
+      model: 'nvidia/test-chat-model',
+      consent: true,
+    })
+
+    const request = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))
+    expect(request).toMatchObject({
+      action: 'chat',
+      provider: 'nvidia',
+      payload: {
+        model: 'nvidia/test-chat-model',
+        temperature: 0,
+        max_tokens: 24,
+        top_p: 1,
+        response_format: { type: 'json_object' },
+      },
+    })
   })
 })
 describe('provider fallback and proxy privacy', () => {

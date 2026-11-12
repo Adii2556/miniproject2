@@ -189,6 +189,7 @@ export async function testProviderModel(runtime: ProviderRuntime, signal?: Abort
       model: runtime.model,
       temperature: 0,
       max_tokens: 24,
+      top_p: 1,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: 'Return valid JSON only.' },
