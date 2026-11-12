@@ -63,10 +63,12 @@ describe('structured document pipeline', () => {
     const sourceId = document.blocks[0].id
     const verified = validateCitations([{ sourceId, excerpt: 'Revenue increased twelve percent' }], [document], 'Revenue increased twelve percent.')
     const uncertain = validateCitations([{ sourceId, excerpt: 'during the quarter' }], [document], 'The company acquired a competitor.')
+    const overlapOnly = validateCitations([{ sourceId, excerpt: 'Revenue increased twelve percent' }], [document], 'Revenue reflects an unrelated acquisition claim.')
     const fabricated = validateCitations([{ sourceId, excerpt: 'Revenue doubled' }], [document], 'Revenue doubled.')
 
     expect(verified[0].status).toBe('verified')
     expect(uncertain[0].status).toBe('uncertain')
+    expect(overlapOnly[0].status).toBe('uncertain')
     expect(fabricated).toEqual([])
     expect(evidenceSupportScore('Revenue increased twelve percent.', verified[0].excerpt)).toBeGreaterThan(0.5)
     expect(findCitationRange(document.fullText, verified[0].excerpt)).not.toBeNull()

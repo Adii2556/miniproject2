@@ -356,7 +356,7 @@ export function validateCitations(
       label: block.label,
       excerpt,
       supportScore,
-      status: supportScore >= 0.18 ? 'verified' : 'uncertain',
+      status: supportScore >= 0.5 ? 'verified' : 'uncertain',
     })
     if (valid.length === 5) break
   }

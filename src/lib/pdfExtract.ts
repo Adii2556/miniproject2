@@ -48,9 +48,22 @@ export async function extractPdf(buffer: ArrayBuffer, signal?: AbortSignal, docu
     maxImageSize: MAX_CANVAS_PIXELS,
     stopAtErrors: false,
   })
+  let rejectGuard: (reason: unknown) => void = () => undefined
+  const guard = new Promise<never>((_, reject) => { rejectGuard = reject })
+  const abort = () => {
+    void task.destroy().catch(() => undefined)
+    rejectGuard(new DOMException('PDF processing was cancelled', 'AbortError'))
+  }
+  const timeoutId = globalThis.setTimeout(() => {
+    void task.destroy().catch(() => undefined)
+    rejectGuard(new PdfSafetyError('This PDF took too long to process. Try a shorter or simpler document.'))
+  }, PDF_PROCESSING_TIMEOUT_MS)
+  signal?.addEventListener('abort', abort, { once: true })
+  const withinDeadline = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, guard])
 
   try {
-    const doc = await task.promise
+    if (signal?.aborted) abort()
+    const doc = await withinDeadline(task.promise)
     assertWithinBudget(startedAt, signal)
     const pageCount = doc.numPages
     if (pageCount > MAX_PDF_PAGES) {
@@ -62,9 +75,9 @@ export async function extractPdf(buffer: ArrayBuffer, signal?: AbortSignal, docu
     let extractedChars = 0
     for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
       assertWithinBudget(startedAt, signal)
-      const page = await doc.getPage(pageNumber)
+      const page = await withinDeadline(doc.getPage(pageNumber))
       try {
-        const content = await page.getTextContent()
+        const content = await withinDeadline(page.getTextContent())
         let pageText = ''
         for (const item of content.items) {
           const textItem = item as { str?: string; hasEOL?: boolean }
@@ -94,7 +107,7 @@ export async function extractPdf(buffer: ArrayBuffer, signal?: AbortSignal, docu
     let firstPageDataUrl: string | null = null
     try {
       assertWithinBudget(startedAt, signal)
-      const page = await doc.getPage(1)
+      const page = await withinDeadline(doc.getPage(1))
       try {
         const base = page.getViewport({ scale: 1 })
         const viewport = page.getViewport({ scale: safeViewportScale(base.width, base.height) })
@@ -103,7 +116,7 @@ export async function extractPdf(buffer: ArrayBuffer, signal?: AbortSignal, docu
         canvas.height = Math.max(1, Math.floor(viewport.height))
         const context = canvas.getContext('2d')
         if (context) {
-          await page.render({ canvas, canvasContext: context, viewport }).promise
+          await withinDeadline(page.render({ canvas, canvasContext: context, viewport }).promise)
           firstPageDataUrl = canvas.toDataURL('image/jpeg', 0.82)
           canvas.width = 1
           canvas.height = 1
@@ -118,6 +131,8 @@ export async function extractPdf(buffer: ArrayBuffer, signal?: AbortSignal, docu
 
     return { text: parts.join('\n\n'), pageTexts: parts, blocks, pageCount, firstPageDataUrl }
   } finally {
-    await task.destroy()
+    globalThis.clearTimeout(timeoutId)
+    signal?.removeEventListener('abort', abort)
+    await task.destroy().catch(() => undefined)
   }
 }

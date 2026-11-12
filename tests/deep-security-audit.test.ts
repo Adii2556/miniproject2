@@ -39,7 +39,8 @@ describe('deep deployment security controls', () => {
       expect(policy).toMatch(/object-src\s+'none'/)
       expect(policy).toMatch(/base-uri\s+'none'/)
       expect(policy).toMatch(/frame-ancestors\s+'none'/)
-      expect(policy).toMatch(/connect-src\s+'self'\s+https:\/\/api\.groq\.com/)
+      expect(policy).toMatch(/connect-src\s+'self'\s*;/)
+      expect(policy).not.toMatch(/connect-src[^;]*api\.(?:groq|openai|deepseek)/)
     }
     expect(map.get('X-Frame-Options')).toBe('DENY')
     expect(map.get('X-Content-Type-Options')).toBe('nosniff')

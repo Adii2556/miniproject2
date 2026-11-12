@@ -5,6 +5,7 @@ import {
   Menu, Moon, Sun, CloudUpload, FileText, FileType2, X, Eye, Trash2, Sparkles, Zap,
   AlertTriangle, KeyRound, Check, ListChecks, Tags, Gauge, FileQuestion, AlignLeft,
   Send, Eraser, ArrowRight, Loader2, CircleAlert, BookOpenText, Lock, ChevronRight,
+  CheckSquare2, Square, Files, CircleDot,
 } from 'lucide-react'
 import Sidebar from '../components/Sidebar'
 import ResultsView, { StatsGrid, GeneratedStamp } from '../components/ResultsView'
@@ -16,9 +17,20 @@ import { useTheme } from '../lib/useTheme'
 import { FileSafetyError, validatePdfSignature, validatePlainText } from '../lib/fileSecurity'
 import { computeStats, extractKeywords, type DocStats } from '../lib/stats'
 import {
-  callGroq, askGroq, FriendlyError, GROQ_MODELS, normalizeSettings,
+  callAI, askAI, clearAnalysisCache, FriendlyError, normalizeSettings,
   type AnalysisSettings, type AnalysisResult, type AnalysisSection, type AnalysisProgress,
 } from '../lib/groq'
+import {
+  DEFAULT_PROVIDER_ORDER,
+  discoverProviderModels,
+  providerDefinition,
+  testProviderModel,
+  type AIExecutionConfig,
+  type ModelMetadata,
+  type ProviderId,
+  type ProviderMode,
+  type ProviderStatus,
+} from '../lib/aiProviders'
 import { SAMPLE_DOCS } from '../lib/samples'
 import { clearHistory, clearLegacySensitiveStorage, loadHistory, saveHistoryEntry, type HistoryEntry } from '../lib/history'
 import { buildDownloadText, downloadTextFile, type GeneratedMap } from '../lib/analysis'
@@ -27,6 +39,9 @@ import { createTextDocument, stableDocumentId, type Citation, type DocumentModel
 import type { OcrProgress } from '../lib/ocr'
 
 const LS_SETTINGS = 'doclense.settings.v1'
+const LS_PROVIDER_SETTINGS = 'doclense.providers.v1'
+const MODEL_CACHE_PREFIX = 'doclense.model-catalog.v1.'
+const MODEL_CACHE_MS = 15 * 60 * 1000
 const MAX_FILE_MB = 15
 const CHAT_LIMIT = 2000
 
@@ -81,6 +96,18 @@ interface Toast {
   tone: 'ok' | 'error'
 }
 
+interface StoredProviderSettings {
+  mode: ProviderMode
+  activeProvider: ProviderId
+  priority: ProviderId[]
+  models: Record<ProviderId, string>
+}
+
+const EMPTY_PROVIDER_KEYS: Record<ProviderId, string> = { groq: '', nvidia: '', deepseek: '', openai: '' }
+const EMPTY_PROVIDER_STATUS: Record<ProviderId, ProviderStatus> = { groq: 'idle', nvidia: 'idle', deepseek: 'idle', openai: 'idle' }
+const EMPTY_PROVIDER_CONSENTS: Record<ProviderId, boolean> = { groq: false, nvidia: false, deepseek: false, openai: false }
+const DEFAULT_PROVIDER_MODELS: Record<ProviderId, string> = { groq: DEFAULT_SETTINGS.model, nvidia: '', deepseek: '', openai: '' }
+
 function loadStoredSettings(): AnalysisSettings {
   try {
     const raw = localStorage.getItem(LS_SETTINGS)
@@ -92,6 +119,28 @@ function loadStoredSettings(): AnalysisSettings {
   }
 }
 
+function loadProviderSettings(): StoredProviderSettings {
+  const fallback: StoredProviderSettings = { mode: 'manual', activeProvider: 'groq', priority: DEFAULT_PROVIDER_ORDER, models: DEFAULT_PROVIDER_MODELS }
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LS_PROVIDER_SETTINGS) ?? '') as Partial<StoredProviderSettings>
+    const validIds = new Set<ProviderId>(DEFAULT_PROVIDER_ORDER)
+    const priority = Array.isArray(parsed.priority) ? parsed.priority.filter((id): id is ProviderId => validIds.has(id as ProviderId)) : []
+    return {
+      mode: parsed.mode === 'automatic' ? 'automatic' : 'manual',
+      activeProvider: validIds.has(parsed.activeProvider as ProviderId) ? parsed.activeProvider as ProviderId : 'groq',
+      priority: priority.length === DEFAULT_PROVIDER_ORDER.length ? priority : DEFAULT_PROVIDER_ORDER,
+      models: { ...DEFAULT_PROVIDER_MODELS, ...(parsed.models ?? {}) },
+    }
+  } catch { return fallback }
+}
+
+function loadCachedCatalog(provider: ProviderId): ModelMetadata[] {
+  try {
+    const cached = JSON.parse(sessionStorage.getItem(`${MODEL_CACHE_PREFIX}${provider}`) ?? '') as { savedAt?: number; models?: ModelMetadata[] }
+    return cached.savedAt && Date.now() - cached.savedAt < MODEL_CACHE_MS && Array.isArray(cached.models) ? cached.models : []
+  } catch { return [] }
+}
+
 const UPLOAD_STAGES = ['Validating file…', 'Reading document…', 'Extracting text…', 'Computing statistics…']
 const GEN_STAGES = ['Reading the document…', 'Drafting your summary…', 'Extracting keywords…', 'Gauging sentiment…', 'Writing quiz questions…', 'Polishing the details…']
 const SUGGESTIONS = ['What is the main argument of this document?', 'Who is the intended audience?', 'What are the strongest counterarguments or risks?']
@@ -99,11 +148,19 @@ const SUGGESTIONS = ['What is the main argument of this document?', 'Who is the 
 export default function AppShell() {
   const { theme, toggleTheme } = useTheme()
 
-  // ---------- sidebar / key / settings ----------
+  // ---------- sidebar / providers / settings ----------
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [apiKey, setApiKey] = useState('')
-  const [revealKey, setRevealKey] = useState(false)
   const [settings, setSettings] = useState<AnalysisSettings>(loadStoredSettings)
+  const initialProviders = useMemo(() => loadProviderSettings(), [])
+  const [providerMode, setProviderMode] = useState<ProviderMode>(initialProviders.mode)
+  const [activeProvider, setActiveProvider] = useState<ProviderId>(initialProviders.activeProvider)
+  const [providerPriority, setProviderPriority] = useState<ProviderId[]>(initialProviders.priority)
+  const [providerKeys, setProviderKeys] = useState<Record<ProviderId, string>>(EMPTY_PROVIDER_KEYS)
+  const [providerModels, setProviderModels] = useState<Record<ProviderId, string>>(initialProviders.models)
+  const [providerConsents, setProviderConsents] = useState<Record<ProviderId, boolean>>(EMPTY_PROVIDER_CONSENTS)
+  const [providerStatuses, setProviderStatuses] = useState<Record<ProviderId, ProviderStatus>>(EMPTY_PROVIDER_STATUS)
+  const [providerErrors, setProviderErrors] = useState<Partial<Record<ProviderId, string>>>({})
+  const [modelCatalogs, setModelCatalogs] = useState<Partial<Record<ProviderId, ModelMetadata[]>>>(() => Object.fromEntries(DEFAULT_PROVIDER_ORDER.map(id => [id, loadCachedCatalog(id)])) as Partial<Record<ProviderId, ModelMetadata[]>>)
 
   useEffect(() => {
     clearLegacySensitiveStorage()
@@ -113,13 +170,32 @@ export default function AppShell() {
     try { localStorage.setItem(LS_SETTINGS, JSON.stringify(settings)) } catch { /* ignore */ }
   }, [settings])
 
+  useEffect(() => {
+    const value: StoredProviderSettings = { mode: providerMode, activeProvider, priority: providerPriority, models: providerModels }
+    try { localStorage.setItem(LS_PROVIDER_SETTINGS, JSON.stringify(value)) } catch { /* ignore */ }
+  }, [activeProvider, providerMode, providerModels, providerPriority])
+
   const updateSettings = useCallback((patch: Partial<AnalysisSettings>) => setSettings(current => normalizeSettings({ ...current, ...patch })), [])
 
-  const canUseGroq = apiKey.trim().length > 0
+  const execution = useMemo<AIExecutionConfig>(() => ({
+    mode: providerMode,
+    activeProvider,
+    priority: providerPriority,
+    providers: Object.fromEntries(DEFAULT_PROVIDER_ORDER.map(provider => [provider, {
+      provider,
+      apiKey: providerKeys[provider],
+      model: providerModels[provider],
+      consent: providerConsents[provider],
+      compatibility: modelCatalogs[provider]?.find(model => model.id === providerModels[provider])?.compatibility ?? 'unverified',
+    }])),
+  }), [activeProvider, modelCatalogs, providerConsents, providerKeys, providerMode, providerModels, providerPriority])
+  const providerIsReady = useCallback((provider: ProviderId) => Boolean(providerKeys[provider].trim() && providerModels[provider].trim() && providerConsents[provider]), [providerConsents, providerKeys, providerModels])
+  const activeReady = providerMode === 'manual' ? providerIsReady(activeProvider) : providerPriority.some(providerIsReady)
 
   // ---------- document state ----------
   const [uploaded, setUploaded] = useState<UploadedDoc | null>(null)
   const [documents, setDocuments] = useState<UploadedDoc[]>([])
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([])
   const [uploading, setUploading] = useState<string | null>(null)
   const [uploadStage, setUploadStage] = useState(0)
   const [uploadError, setUploadError] = useState<UploadErrorState | null>(null)
@@ -148,7 +224,8 @@ export default function AppShell() {
   // ---------- history / toasts ----------
   const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory())
   const [toasts, setToasts] = useState<Toast[]>([])
-  const workspaceStats = useMemo(() => computeStats(documents.map(document => document.fullText).join('\n\n')), [documents])
+  const selectedDocuments = useMemo(() => documents.filter(document => selectedDocumentIds.includes(document.id)), [documents, selectedDocumentIds])
+  const workspaceStats = useMemo(() => computeStats(selectedDocuments.map(document => document.fullText).join('\n\n')), [selectedDocuments])
 
   const mainRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -162,6 +239,78 @@ export default function AppShell() {
     const id = ++toastId.current
     setToasts(t => [...t.slice(-2), { id, message, tone }])
     window.setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3600)
+  }, [])
+
+  const connectProvider = useCallback(async (provider: ProviderId, refresh = false) => {
+    const key = providerKeys[provider].trim()
+    if (!key) {
+      setProviderErrors(current => ({ ...current, [provider]: 'Enter an API key first.' }))
+      return
+    }
+    if (!providerConsents[provider]) {
+      setProviderErrors(current => ({ ...current, [provider]: 'Allow API usage before contacting this provider.' }))
+      return
+    }
+    if (!refresh) {
+      const cached = loadCachedCatalog(provider)
+      if (cached.length > 0) {
+        setModelCatalogs(current => ({ ...current, [provider]: cached }))
+        setProviderStatuses(current => ({ ...current, [provider]: 'ready' }))
+        if (!providerModels[provider]) setProviderModels(current => ({ ...current, [provider]: cached.find(model => model.compatibility === 'verified')?.id ?? cached[0]?.id ?? '' }))
+        return
+      }
+    }
+    setProviderStatuses(current => ({ ...current, [provider]: 'validating' }))
+    setProviderErrors(current => ({ ...current, [provider]: undefined }))
+    try {
+      const models = await discoverProviderModels(provider, key)
+      setModelCatalogs(current => ({ ...current, [provider]: models }))
+      try { sessionStorage.setItem(`${MODEL_CACHE_PREFIX}${provider}`, JSON.stringify({ savedAt: Date.now(), models })) } catch { /* ignore */ }
+      setProviderStatuses(current => ({ ...current, [provider]: 'ready' }))
+      if (!providerModels[provider]) {
+        const recommended = models.find(model => model.compatibility === 'verified') ?? models.find(model => model.compatibility === 'unverified')
+        if (recommended) setProviderModels(current => ({ ...current, [provider]: recommended.id }))
+      }
+      pushToast(models.length > 0 ? `${providerDefinition(provider).label} connected · ${models.length} models found` : `${providerDefinition(provider).label} connected · enter a model ID manually`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `Could not connect to ${providerDefinition(provider).label}.`
+      setProviderStatuses(current => ({ ...current, [provider]: 'error' }))
+      setProviderErrors(current => ({ ...current, [provider]: message }))
+    }
+  }, [providerConsents, providerKeys, providerModels, pushToast])
+
+  const testProvider = useCallback(async (provider: ProviderId) => {
+    try {
+      await testProviderModel({ provider, apiKey: providerKeys[provider], model: providerModels[provider], consent: providerConsents[provider] })
+      setModelCatalogs(current => ({ ...current, [provider]: (current[provider] ?? []).map(model => model.id === providerModels[provider] ? { ...model, compatibility: 'verified', reason: 'A lightweight JSON chat request succeeded.' } : model) }))
+      setProviderStatuses(current => ({ ...current, [provider]: 'ready' }))
+      pushToast(`${providerDefinition(provider).label} model compatibility confirmed`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'The compatibility test failed.'
+      setProviderErrors(current => ({ ...current, [provider]: message }))
+      pushToast(message, 'error')
+    }
+  }, [providerConsents, providerKeys, providerModels, pushToast])
+
+  const changeActiveProvider = useCallback((provider: ProviderId) => {
+    setActiveProvider(provider)
+    setSettings(current => normalizeSettings({ ...current, model: providerModels[provider] || current.model }))
+  }, [providerModels])
+
+  const changeProviderModel = useCallback((provider: ProviderId, model: string) => {
+    setProviderModels(current => ({ ...current, [provider]: model }))
+    if (provider === activeProvider) setSettings(current => normalizeSettings({ ...current, model }))
+  }, [activeProvider])
+
+  const invalidateScope = useCallback(() => {
+    generationAbortRef.current?.abort()
+    questionAbortRef.current?.abort()
+    clearAnalysisCache()
+    setResult(null)
+    setShowResults(false)
+    setGenError(null)
+    setMessages([])
+    setActiveCitation(null)
   }, [])
 
   const resetSettings = useCallback(() => {
@@ -202,14 +351,12 @@ export default function AppShell() {
     const next: UploadedDoc = { ...documentModel, sizeBytes, firstPageDataUrl, stats, hasInstructionLikeContent: safety.hasInstructionLikeContent, ocrApplied }
     setUploaded(next)
     setDocuments(current => replaceWorkspace ? [next] : [...current.filter(document => document.id !== next.id), next].slice(-6))
-    setResult(null)
-    setShowResults(false)
-    setGenError(null)
-    setMessages([])
+    setSelectedDocumentIds(current => replaceWorkspace ? [next.id] : [...current.filter(id => id !== next.id), next.id])
+    invalidateScope()
     setUploadError(null)
     setPendingOcr(null)
     setOcrProgress(null)
-  }, [])
+  }, [invalidateScope])
 
   const processFile = useCallback(async (file: File, documentOrdinal = documents.length) => {
     setUploadError(null)
@@ -341,6 +488,7 @@ export default function AppShell() {
     questionAbortRef.current?.abort()
     setUploaded(null)
     setDocuments([])
+    setSelectedDocumentIds([])
     setResult(null)
     setShowResults(false)
     setGenError(null)
@@ -357,13 +505,17 @@ export default function AppShell() {
 
   const generate = useCallback(async () => {
     if (!uploaded || generating) return
+    if (selectedDocuments.length === 0) {
+      pushToast('Select at least one document for analysis', 'error')
+      return
+    }
     const chosen = SECTION_KEYS.filter(k => sections[k])
     if (chosen.length === 0) {
       pushToast('Pick at least one thing to generate', 'error')
       return
     }
-    if (!canUseGroq) {
-      pushToast('Add your Groq API key first — it is in the sidebar', 'error')
+    if (!activeReady) {
+      pushToast(`Configure ${providerDefinition(activeProvider).label}, choose a model, and allow API usage first`, 'error')
       setSidebarOpen(true)
       return
     }
@@ -375,7 +527,7 @@ export default function AppShell() {
     const controller = new AbortController()
     generationAbortRef.current = controller
     try {
-      const res = await callGroq(apiKey, settings, chosen as AnalysisSection[], documents, controller.signal, setAnalysisProgress)
+      const res = await callAI(execution, settings, chosen as AnalysisSection[], selectedDocuments, controller.signal, setAnalysisProgress)
       const gen: GeneratedMap = {
         summary: chosen.includes('summary'),
         keyPoints: chosen.includes('keyPoints'),
@@ -390,14 +542,14 @@ export default function AppShell() {
       // fire the tiny toast a beat later so it doesn't fight the jump
       window.setTimeout(() => pushToast('Analysis complete'), 150)
       setHistory(saveHistoryEntry({
-        fileName: uploaded.fileName,
-        kind: uploaded.kind,
-        pageCount: uploaded.pageCount,
-        words: uploaded.stats.words,
-        title: res.title ?? uploaded.fileName.replace(/\.[^.]+$/, ''),
+        fileName: selectedDocuments.length === 1 ? selectedDocuments[0].fileName : `${selectedDocuments.length}-document workspace`,
+        kind: selectedDocuments.length === 1 ? selectedDocuments[0].kind : 'TEXT',
+        pageCount: selectedDocuments.reduce<number | null>((sum, document) => sum === null || document.pageCount === null ? null : sum + document.pageCount, 0),
+        words: workspaceStats.words,
+        title: res.title ?? (selectedDocuments.length === 1 ? selectedDocuments[0].fileName.replace(/\.[^.]+$/, '') : 'Document comparison'),
         oneLiner: res.oneLiner ?? '',
         sentimentLabel: res.sentiment?.label,
-        text: uploaded.fullText,
+        text: selectedDocuments.map(document => document.fullText).join('\n\n'),
       }))
     } catch (err) {
       if ((err as Error).name === 'AbortError') return
@@ -411,14 +563,18 @@ export default function AppShell() {
         setAnalysisProgress(null)
       }
     }
-  }, [uploaded, documents, generating, sections, canUseGroq, apiKey, settings, pinToTop, pushToast])
+  }, [uploaded, generating, selectedDocuments, sections, activeReady, activeProvider, execution, settings, pinToTop, pushToast, workspaceStats.words])
 
   // ---------- chat ----------
   const askQuestion = useCallback(async (question: string) => {
     const q = question.trim()
     if (!q || !uploaded || askLoading) return
-    if (!canUseGroq) {
-      pushToast('Add your Groq API key in the sidebar first', 'error')
+    if (selectedDocuments.length === 0) {
+      pushToast('Select at least one document before asking a question', 'error')
+      return
+    }
+    if (!activeReady) {
+      pushToast(`Configure ${providerDefinition(activeProvider).label} in the sidebar first`, 'error')
       setSidebarOpen(true)
       return
     }
@@ -430,7 +586,7 @@ export default function AppShell() {
     const controller = new AbortController()
     questionAbortRef.current = controller
     try {
-      const answer = await askGroq(apiKey, settings, documents, history, q, controller.signal)
+      const answer = await askAI(execution, settings, selectedDocuments, history, q, controller.signal)
       setMessages(m => [...m, { id: `a-${Date.now()}`, role: 'assistant', content: answer.text, citations: answer.citations, evidenceStatus: answer.evidenceStatus }])
     } catch (err) {
       if ((err as Error).name === 'AbortError') return
@@ -442,7 +598,7 @@ export default function AppShell() {
         setAskLoading(false)
       }
     }
-  }, [uploaded, documents, askLoading, canUseGroq, apiKey, settings, messages, pushToast])
+  }, [uploaded, selectedDocuments, askLoading, activeReady, activeProvider, execution, settings, messages, pushToast])
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
@@ -451,10 +607,10 @@ export default function AppShell() {
   // ---------- keyboard shortcuts ----------
   const downloadReport = useCallback(() => {
     if (!uploaded || !result) return
-    const names = documents.map(document => document.fileName)
-    downloadTextFile(uploaded.fileName, buildDownloadText(names, result, workspaceStats, generated))
+    const names = selectedDocuments.map(document => document.fileName)
+    downloadTextFile(selectedDocuments.length === 1 ? selectedDocuments[0].fileName : 'document-comparison', buildDownloadText(names, result, workspaceStats, generated))
     pushToast('Summary downloaded as .txt')
-  }, [uploaded, documents, result, generated, pushToast, workspaceStats])
+  }, [uploaded, selectedDocuments, result, generated, pushToast, workspaceStats])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -477,30 +633,63 @@ export default function AppShell() {
   }, [processFiles])
 
   const anyGenerated = result !== null
-  const kwForReader = generated.keywords && result?.keywords?.length ? result.keywords : extractKeywords(documents.map(document => document.fullText).join('\n\n'))
+  const kwForReader = generated.keywords && result?.keywords?.length ? result.keywords : extractKeywords(selectedDocuments.map(document => document.fullText).join('\n\n'))
   const openCitation = useCallback((citation: Citation) => {
+    const source = documents.find(document => document.id === citation.documentId)
+    if (source) setUploaded(source)
     setActiveCitation(citation)
     setReaderOpen(true)
-  }, [])
+  }, [documents])
   const removeDocument = useCallback((documentId: string) => {
+    generationAbortRef.current?.abort()
+    questionAbortRef.current?.abort()
     const next = documents.filter(document => document.id !== documentId)
     setDocuments(next)
-    setUploaded(next.at(-1) ?? null)
-    setResult(null)
-    setShowResults(false)
-    setMessages([])
-    setActiveCitation(null)
-  }, [documents])
+    setSelectedDocumentIds(current => current.filter(id => id !== documentId))
+    setUploaded(current => current?.id === documentId ? (next.at(-1) ?? null) : current)
+    invalidateScope()
+  }, [documents, invalidateScope])
+
+  const setDocumentSelection = useCallback((next: string[]) => {
+    const valid = documents.map(document => document.id).filter(id => next.includes(id))
+    if (valid.length === selectedDocumentIds.length && valid.every((id, index) => id === selectedDocumentIds[index])) return
+    setSelectedDocumentIds(valid)
+    invalidateScope()
+    pushToast(valid.length === 0 ? 'Analysis scope cleared' : `${valid.length} document${valid.length === 1 ? '' : 's'} selected for analysis`)
+  }, [documents, invalidateScope, pushToast, selectedDocumentIds])
+
+  const toggleDocumentSelection = useCallback((documentId: string) => {
+    setDocumentSelection(selectedDocumentIds.includes(documentId)
+      ? selectedDocumentIds.filter(id => id !== documentId)
+      : [...selectedDocumentIds, documentId])
+  }, [selectedDocumentIds, setDocumentSelection])
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-paper-grain font-sans text-ink dark:bg-moss-night-deep dark:text-text-dark">
       <Sidebar
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
-        apiKey={apiKey}
-        setApiKey={setApiKey}
-        revealKey={revealKey}
-        setRevealKey={setRevealKey}
+        providerMode={providerMode}
+        setProviderMode={setProviderMode}
+        activeProvider={activeProvider}
+        setActiveProvider={changeActiveProvider}
+        providerPriority={providerPriority}
+        setProviderPriority={setProviderPriority}
+        providerKeys={providerKeys}
+        setProviderKey={(provider, key) => {
+          setProviderKeys(current => ({ ...current, [provider]: key }))
+          setProviderStatuses(current => ({ ...current, [provider]: 'idle' }))
+          setProviderErrors(current => ({ ...current, [provider]: undefined }))
+        }}
+        providerModels={providerModels}
+        setProviderModel={changeProviderModel}
+        modelCatalogs={modelCatalogs}
+        providerStatuses={providerStatuses}
+        providerErrors={providerErrors}
+        providerConsents={providerConsents}
+        setProviderConsent={(provider, consent) => setProviderConsents(current => ({ ...current, [provider]: consent }))}
+        onConnectProvider={(provider, refresh) => { void connectProvider(provider, refresh) }}
+        onTestProvider={provider => { void testProvider(provider) }}
         settings={settings}
         updateSettings={updateSettings}
         onResetSettings={resetSettings}
@@ -525,7 +714,7 @@ export default function AppShell() {
             </nav>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
-            <span className="hidden items-center gap-1.5 rounded-full border border-moss/25 bg-moss-mist px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wider text-moss-deep md:inline-flex dark:border-persimmon-dark/30 dark:bg-persimmon-dark/10 dark:text-persimmon-dark"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />{GROQ_MODELS.find(m => m.id === settings.model)?.label}</span>
+            <span className="hidden max-w-[240px] items-center gap-1.5 rounded-full border border-moss/25 bg-moss-mist px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wider text-moss-deep md:inline-flex dark:border-persimmon-dark/30 dark:bg-persimmon-dark/10 dark:text-persimmon-dark"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${activeReady ? 'bg-emerald-500' : 'bg-gold'}`} /><span className="truncate">{providerDefinition(activeProvider).shortLabel} · {providerModels[activeProvider] || 'No model'}</span></span>
             <Link to="/docs" className="rounded-xl px-3 py-2 text-[12px] font-bold text-ink-soft transition hover:bg-moss-mist hover:text-moss-deep dark:text-text-dark-soft dark:hover:bg-white/5 dark:hover:text-text-dark">Docs</Link>
             <button onClick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} className="rounded-xl p-2 text-ink-soft transition hover:bg-moss-mist hover:text-moss-deep dark:text-text-dark-soft dark:hover:bg-white/5 dark:hover:text-text-dark">
               {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
@@ -541,7 +730,7 @@ export default function AppShell() {
             {uploaded && showResults && anyGenerated && (
               <div key="results" className="space-y-4">
                 <GeneratedStamp />
-                <ResultsView fileNames={documents.map(document => document.fileName)} stats={workspaceStats} result={result!} generated={generated} onToast={(m) => pushToast(m)} onOpenCitation={openCitation} />
+                <ResultsView fileNames={selectedDocuments.map(document => document.fileName)} stats={workspaceStats} result={result!} generated={generated} onToast={(m) => pushToast(m)} onOpenCitation={openCitation} />
                 {generated.quiz && result?.quiz && <QuizCard quiz={result.quiz} onToast={(m) => pushToast(m)} onOpenCitation={openCitation} />}
                 <div className="flex items-center gap-3 px-1 pt-1 text-[10.5px] font-bold uppercase tracking-[0.18em] text-ink-soft/70 dark:text-text-dark-soft/60">
                   <span className="h-px flex-1 bg-moss/20 dark:bg-white/10" />
@@ -607,7 +796,7 @@ export default function AppShell() {
                     <CloudUpload size={38} strokeWidth={2} />
                   </motion.div>
                   <h1 className="mt-5 font-display text-3xl font-extrabold tracking-tight text-ink dark:text-text-dark sm:text-4xl">{dragActive ? 'Release to add documents' : 'Build your evidence workspace'}</h1>
-                  <p className="mx-auto mt-2 max-w-md font-body text-[15px] leading-relaxed text-ink-soft dark:text-text-dark-soft">Add up to six PDF or text files, {MAX_FILE_MB} MB each. Extraction stays in this tab; selected source excerpts are sent to Groq only when you analyze or ask a question.</p>
+                  <p className="mx-auto mt-2 max-w-md font-body text-[15px] leading-relaxed text-ink-soft dark:text-text-dark-soft">Add up to six PDF or text files, {MAX_FILE_MB} MB each. Extraction stays in this tab; selected source excerpts go only to the provider you approve when you analyze or ask a question.</p>
                   <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
                     <span className="inline-flex items-center gap-2 rounded-2xl bg-moss px-5 py-3 font-sans text-sm font-extrabold text-cream shadow-[0_3px_0_#0e4740] transition group-hover:bg-moss-deep dark:bg-persimmon-dark dark:text-[#2b1206] dark:shadow-[0_3px_0_#b4532a]"><FileText size={17} />Browse files</span>
                     <span className="inline-flex items-center gap-2 rounded-2xl border-2 border-moss/30 px-5 py-[10px] font-sans text-sm font-bold text-moss-deep dark:border-white/15 dark:text-text-dark"><Sparkles size={15} />or pick a sample below</span>
@@ -641,23 +830,55 @@ export default function AppShell() {
             {/* ===================== FILE CARD + CONFIG ===================== */}
             {uploaded && !uploading && (
               <>
-                {/* stats stay above the uploader before generating; after generating they render at top */}
-                {!(showResults && anyGenerated) && <StatsGrid stats={workspaceStats} />}
-
-                {documents.length > 1 && (
-                  <section aria-label="Documents in workspace" className="rounded-2xl border border-moss/20 bg-cream/70 p-3 dark:border-white/10 dark:bg-panel-dark/70">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="mr-1 text-[10px] font-extrabold uppercase tracking-[0.18em] text-ink-soft dark:text-text-dark-soft">{documents.length} sources</span>
-                      {documents.map(document => (
-                        <span key={document.id} className="inline-flex max-w-[16rem] items-center gap-1.5 rounded-xl border border-moss/20 bg-paper px-2.5 py-1.5 text-[11px] font-bold text-ink dark:border-white/10 dark:bg-white/5 dark:text-text-dark">
-                          <FileText size={12} className="shrink-0 text-moss dark:text-gold-dark" />
-                          <span className="truncate">{document.fileName}</span>
-                          <button type="button" onClick={() => removeDocument(document.id)} className="rounded p-0.5 text-ink-soft hover:bg-persimmon-mist hover:text-persimmon dark:text-text-dark-soft" aria-label={`Remove ${document.fileName}`}><X size={11} /></button>
-                        </span>
-                      ))}
+                {/* statistics are scoped to the selected collection, never the preview alone */}
+                {!(showResults && anyGenerated) && (
+                  <section aria-label="Selected collection statistics">
+                    <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                      <p className="inline-flex items-center gap-1.5 text-[10.5px] font-extrabold uppercase tracking-[0.18em] text-ink-soft dark:text-text-dark-soft"><Files size={12} />Selected collection statistics</p>
+                      <span className="font-mono text-[10px] font-bold text-moss-deep dark:text-gold-dark">{selectedDocuments.length} of {documents.length} documents</span>
                     </div>
+                    <StatsGrid stats={workspaceStats} />
                   </section>
                 )}
+
+                <section aria-label="Document workspace" className="overflow-hidden rounded-3xl border border-moss/25 bg-cream/80 shadow-sm dark:border-white/10 dark:bg-panel-dark/80">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-moss/15 px-4 py-3 dark:border-white/10">
+                    <div>
+                      <p className="font-display text-[14px] font-extrabold text-ink dark:text-text-dark">Document workspace</p>
+                      <p className="mt-0.5 text-[10px] font-semibold text-ink-soft dark:text-text-dark-soft"><strong className="text-moss-deep dark:text-gold-dark">{selectedDocuments.length} selected</strong> for analysis · {documents.length} uploaded</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <button type="button" onClick={() => setDocumentSelection(documents.map(document => document.id))} className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[10px] font-bold uppercase tracking-wide text-moss-deep hover:bg-moss-mist dark:text-gold-dark dark:hover:bg-white/5"><CheckSquare2 size={12} />Select all</button>
+                      <button type="button" onClick={() => setDocumentSelection([])} className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[10px] font-bold uppercase tracking-wide text-ink-soft hover:bg-moss-mist dark:text-text-dark-soft dark:hover:bg-white/5"><Square size={12} />Deselect all</button>
+                      <button type="button" onClick={() => fileInputRef.current?.click()} disabled={documents.length >= 6} className="inline-flex items-center gap-1 rounded-lg border border-moss/25 px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-moss-deep hover:bg-moss-mist disabled:opacity-40 dark:border-white/12 dark:text-text-dark dark:hover:bg-white/5"><CloudUpload size={12} />Add documents</button>
+                    </div>
+                  </div>
+                  <div className="grid gap-2 p-3 sm:grid-cols-2">
+                    {documents.map(document => {
+                      const selected = selectedDocumentIds.includes(document.id)
+                      const active = uploaded.id === document.id
+                      return (
+                        <article key={document.id} className={`relative rounded-2xl border p-3 transition ${active ? 'border-persimmon/60 bg-persimmon-mist/25 dark:border-persimmon-dark/60 dark:bg-persimmon-dark/10' : 'border-moss/15 bg-paper/55 dark:border-white/8 dark:bg-white/[0.025]'}`}>
+                          <div className="flex items-start gap-2.5">
+                            <button type="button" role="checkbox" aria-checked={selected} onClick={() => toggleDocumentSelection(document.id)} className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 ${selected ? 'border-moss bg-moss text-cream dark:border-persimmon-dark dark:bg-persimmon-dark dark:text-[#2b1206]' : 'border-ink/25 text-transparent dark:border-white/25'}`} aria-label={`${selected ? 'Exclude' : 'Include'} ${document.fileName} from analysis`}><Check size={12} strokeWidth={4} /></button>
+                            <button type="button" onClick={() => setUploaded(document)} className="min-w-0 flex-1 text-left" aria-pressed={active}>
+                              <span className="flex items-center gap-1.5">
+                                <FileText size={13} className="shrink-0 text-moss dark:text-gold-dark" />
+                                <span className="truncate text-[11.5px] font-extrabold text-ink dark:text-text-dark" title={document.fileName}>{document.fileName}</span>
+                              </span>
+                              <span className="mt-1 block text-[9.5px] font-semibold text-ink-soft dark:text-text-dark-soft">{document.kind} · {(document.sizeBytes / 1024).toFixed(0)} KB · {document.pageCount === null ? `${document.blocks.length} sections` : `${document.pageCount} page${document.pageCount === 1 ? '' : 's'}`} · {document.stats.words.toLocaleString()} words</span>
+                            </button>
+                            <button type="button" onClick={() => removeDocument(document.id)} className="rounded-lg p-1 text-ink-soft hover:bg-persimmon-mist hover:text-persimmon dark:text-text-dark-soft dark:hover:bg-persimmon-dark/10" aria-label={`Remove ${document.fileName}`}><Trash2 size={13} /></button>
+                          </div>
+                          <div className="mt-2 flex items-center justify-between gap-2 pl-7">
+                            <span className={`inline-flex items-center gap-1 text-[9px] font-extrabold uppercase tracking-wider ${active ? 'text-persimmon dark:text-persimmon-dark' : 'text-transparent'}`}><CircleDot size={10} />Active preview</span>
+                            <span className={`text-[9px] font-bold uppercase tracking-wider ${selected ? 'text-moss dark:text-emerald-300' : 'text-ink-soft/60 dark:text-text-dark-soft/55'}`}>{selected ? 'In analysis scope' : 'Preview only'}</span>
+                          </div>
+                        </article>
+                      )
+                    })}
+                  </div>
+                </section>
 
                 <section className="overflow-hidden rounded-3xl border border-moss/25 bg-cream shadow-sm dark:border-white/10 dark:bg-panel-dark">
                   <div className="flex items-center gap-4 p-4 sm:p-5">
@@ -670,7 +891,8 @@ export default function AppShell() {
                       </div>
                     )}
                     <div className="min-w-0 flex-1">
-                      <p className="truncate font-display text-[15px] font-bold text-ink dark:text-text-dark" title={uploaded.fileName}>{uploaded.fileName}</p>
+                      <p className="text-[9.5px] font-extrabold uppercase tracking-[0.16em] text-persimmon dark:text-persimmon-dark">Active preview</p>
+                      <p className="mt-0.5 truncate font-display text-[15px] font-bold text-ink dark:text-text-dark" title={uploaded.fileName}>{uploaded.fileName}</p>
                       <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] font-semibold text-ink-soft dark:text-text-dark-soft">
                         <span className="inline-flex items-center gap-1 rounded-md bg-moss-mist px-1.5 py-0.5 text-[9.5px] font-extrabold uppercase tracking-wider text-moss-deep dark:bg-white/8 dark:text-gold-dark">{uploaded.kind}</span>
                         {uploaded.ocrApplied && <span className="rounded-md border border-gold/35 bg-gold/10 px-1.5 py-0.5 text-[9.5px] font-extrabold uppercase tracking-wider text-[#73500f] dark:text-gold-dark">OCR · verify text</span>}
@@ -736,14 +958,16 @@ export default function AppShell() {
                     {/* ---- generate row ---- */}
                     <div className="mt-3.5 flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
                       <div className="min-w-0">
-                        <p className="text-[11px] font-semibold text-ink-soft dark:text-text-dark-soft"><span className="font-extrabold text-moss-deep dark:text-gold-dark">{selectedCount} of 5</span> insights · {settings.analysisMode} mode · {settings.maxChunks}-chunk budget · ≤{Math.ceil(settings.maxChunks / 2) + 2} Groq requests</p>
-                        {!canUseGroq && (
-                          <button onClick={() => setSidebarOpen(true)} className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-bold text-[#a33a10] underline decoration-persimmon/50 underline-offset-2 transition hover:text-persimmon dark:text-persimmon-dark"><KeyRound size={11} />No Groq key yet — add one in the sidebar, it takes 20 seconds<ArrowRight size={11} /></button>
+                        <p className="text-[11px] font-semibold text-ink-soft dark:text-text-dark-soft"><span className="font-extrabold text-moss-deep dark:text-gold-dark">{selectedCount} of 5</span> insights · {selectedDocuments.length} source{selectedDocuments.length === 1 ? '' : 's'} · {settings.analysisMode} mode · ≤{Math.ceil(settings.maxChunks / 2) + 2} requests</p>
+                        {analysisProgress?.provider ? <p className="mt-1 text-[10px] font-bold text-moss-deep dark:text-emerald-300">Active: {analysisProgress.provider} · {analysisProgress.model}</p> : null}
+                        {!activeReady && (
+                          <button onClick={() => setSidebarOpen(true)} className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-bold text-[#a33a10] underline decoration-persimmon/50 underline-offset-2 transition hover:text-persimmon dark:text-persimmon-dark"><KeyRound size={11} />Configure a provider, model, key, and usage consent<ArrowRight size={11} /></button>
                         )}
+                        {selectedDocuments.length === 0 ? <p className="mt-1 text-[11px] font-bold text-[#a33a10] dark:text-persimmon-dark">Select at least one document to enable analysis.</p> : null}
                       </div>
                       <button
                         onClick={generating ? () => generationAbortRef.current?.abort() : generate}
-                        disabled={!generating && selectedCount === 0}
+                        disabled={!generating && (selectedCount === 0 || selectedDocuments.length === 0)}
                         className="group inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-persimmon px-6 py-4 font-sans text-[15px] font-extrabold text-cream shadow-[0_4px_0_#b93a17] transition hover:bg-persimmon-soft active:translate-y-0.5 active:shadow-[0_2px_0_#b93a17] disabled:cursor-not-allowed disabled:opacity-70 dark:bg-persimmon-dark dark:text-[#2b1206] dark:shadow-[0_4px_0_#b4532a]"
                       >
                         {generating ? (
@@ -769,7 +993,7 @@ export default function AppShell() {
                       <DocLenseLogo size={26} />
                       <div>
                         <p className="font-display text-[13.5px] font-extrabold leading-none text-ink dark:text-text-dark">Ask DocLense</p>
-                        <p className="mt-0.5 text-[9.5px] font-semibold uppercase tracking-widest text-ink-soft/80 dark:text-text-dark-soft/70">Grounded across {documents.length} {documents.length === 1 ? 'document' : 'documents'}</p>
+                        <p className="mt-0.5 text-[9.5px] font-semibold uppercase tracking-widest text-ink-soft/80 dark:text-text-dark-soft/70">Grounded across {selectedDocuments.length} selected {selectedDocuments.length === 1 ? 'document' : 'documents'}</p>
                       </div>
                     </div>
                     {messages.length > 0 && (
@@ -818,7 +1042,8 @@ export default function AppShell() {
                       maxLength={CHAT_LIMIT}
                       placeholder="Ask across the selected documents…"
                       aria-label="Ask a question about the selected documents"
-                      className="min-w-0 flex-1 rounded-2xl border border-moss/25 bg-paper px-4 py-3 font-body text-[14.5px] text-ink outline-none transition placeholder:text-ink-soft/60 focus:border-moss focus:ring-2 focus:ring-moss/20 dark:border-white/12 dark:bg-white/5 dark:text-text-dark dark:placeholder:text-text-dark-soft/50 dark:focus:border-persimmon-dark/60 dark:focus:ring-persimmon-dark/15"
+                      disabled={selectedDocuments.length === 0}
+                      className="min-w-0 flex-1 rounded-2xl border border-moss/25 bg-paper px-4 py-3 font-body text-[14.5px] text-ink outline-none transition placeholder:text-ink-soft/60 focus:border-moss focus:ring-2 focus:ring-moss/20 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/12 dark:bg-white/5 dark:text-text-dark dark:placeholder:text-text-dark-soft/50 dark:focus:border-persimmon-dark/60 dark:focus:ring-persimmon-dark/15"
                     />
                     <button type={askLoading ? 'button' : 'submit'} onClick={askLoading ? () => questionAbortRef.current?.abort() : undefined} disabled={!askLoading && !draft.trim()} aria-label={askLoading ? 'Cancel question' : 'Send question'} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-moss text-cream shadow-[0_3px_0_#0e4740] transition hover:bg-moss-deep disabled:cursor-not-allowed disabled:opacity-50 dark:bg-persimmon-dark dark:text-[#2b1206] dark:shadow-[0_3px_0_#b4532a]">
                       {askLoading ? <X size={18} /> : <Send size={18} strokeWidth={2.2} />}
@@ -844,7 +1069,7 @@ export default function AppShell() {
       </div>
 
       <DocumentReader
-        documents={documents}
+        documents={uploaded ? [uploaded] : []}
         open={readerOpen}
         activeCitation={activeCitation}
         keywords={kwForReader}

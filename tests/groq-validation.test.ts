@@ -42,9 +42,9 @@ describe('Groq schema, evidence, and retry policy', () => {
     vi.stubGlobal('fetch', fetchMock)
     const result = await callGroq('gsk_test', settings, ['summary'], document)
     expect(fetchMock).toHaveBeenCalledTimes(2)
-    const retryBody = JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body)) as { temperature: number; messages: Array<{ content: string }> }
-    expect(retryBody.temperature).toBe(0)
-    expect(retryBody.messages.at(-1)?.content).toContain('failed validation')
+    const retryBody = JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body)) as { payload: { temperature: number; messages: Array<{ content: string }> } }
+    expect(retryBody.payload.temperature).toBe(0)
+    expect(retryBody.payload.messages.at(-1)?.content).toContain('failed validation')
     expect(result.summary?.evidenceStatus).toBe('verified')
   })
 
@@ -53,11 +53,11 @@ describe('Groq schema, evidence, and retry policy', () => {
     await expect(callGroq('gsk_test', settings, ['summary'], document)).rejects.toMatchObject({ code: 'UNVERIFIED' })
   })
 
-  test.each([[401, 'AUTH'], [429, 'RATE_LIMIT'], [503, 'SERVER']] as const)('maps HTTP %s without retrying', async (status, code) => {
+  test.each([[401, 'AUTH', 1], [429, 'RATE_LIMIT', 3], [503, 'SERVER', 3]] as const)('maps HTTP %s with the bounded retry policy', async (status, code, calls) => {
     const fetchMock = vi.fn().mockResolvedValue(response({ error: { message: 'rejected' } }, status))
     vi.stubGlobal('fetch', fetchMock)
     await expect(callGroq('gsk_test', settings, ['summary'], document)).rejects.toMatchObject({ code })
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(calls)
   })
 
   test('propagates user cancellation', async () => {

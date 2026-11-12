@@ -1,20 +1,35 @@
 import { useEffect, useRef } from 'react'
 import {
-  Eye, EyeOff, ChevronDown, KeyRound, ExternalLink, Cpu, Flame, Rows3, AlignLeft,
-  Languages, GraduationCap, RotateCcw, History, Trash2, FileText, X, CheckCircle2, Zap,
+  ChevronDown, Flame, Rows3, AlignLeft,
+  Languages, GraduationCap, RotateCcw, History, Trash2, FileText, X, Zap,
   ScanSearch, BrainCircuit,
 } from 'lucide-react'
-import { GROQ_MODELS, SUPPORTED_LANGUAGES, type AnalysisSettings } from '../lib/groq'
+import { SUPPORTED_LANGUAGES, type AnalysisSettings } from '../lib/groq'
 import DocLenseLogo from './DocLenseLogo'
+import ProviderSettings from './ProviderSettings'
+import type { ModelMetadata, ProviderId, ProviderMode, ProviderStatus } from '../lib/aiProviders'
 import type { HistoryEntry } from '../lib/history'
 
 interface SidebarProps {
   open: boolean
   onClose: () => void
-  apiKey: string
-  setApiKey: (v: string) => void
-  revealKey: boolean
-  setRevealKey: (v: boolean) => void
+  providerMode: ProviderMode
+  setProviderMode: (mode: ProviderMode) => void
+  activeProvider: ProviderId
+  setActiveProvider: (provider: ProviderId) => void
+  providerPriority: ProviderId[]
+  setProviderPriority: (priority: ProviderId[]) => void
+  providerKeys: Record<ProviderId, string>
+  setProviderKey: (provider: ProviderId, key: string) => void
+  providerModels: Record<ProviderId, string>
+  setProviderModel: (provider: ProviderId, model: string) => void
+  modelCatalogs: Partial<Record<ProviderId, ModelMetadata[]>>
+  providerStatuses: Record<ProviderId, ProviderStatus>
+  providerErrors: Partial<Record<ProviderId, string>>
+  providerConsents: Record<ProviderId, boolean>
+  setProviderConsent: (provider: ProviderId, consent: boolean) => void
+  onConnectProvider: (provider: ProviderId, refresh?: boolean) => void
+  onTestProvider: (provider: ProviderId) => void
   settings: AnalysisSettings
   updateSettings: (patch: Partial<AnalysisSettings>) => void
   onResetSettings: () => void
@@ -34,7 +49,10 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 export default function Sidebar(props: SidebarProps) {
   const {
-    open, onClose, apiKey, setApiKey, revealKey, setRevealKey,
+    open, onClose, providerMode, setProviderMode, activeProvider, setActiveProvider,
+    providerPriority, setProviderPriority, providerKeys, setProviderKey, providerModels,
+    setProviderModel, modelCatalogs, providerStatuses, providerErrors, providerConsents,
+    setProviderConsent, onConnectProvider, onTestProvider,
     settings, updateSettings, onResetSettings, history, onClearHistory, onPickHistory, disabled,
   } = props
   const tempPct = ((settings.temperature - 0) / 1.2) * 100
@@ -49,8 +67,6 @@ export default function Sidebar(props: SidebarProps) {
       return () => window.removeEventListener('keydown', onKey)
     }
   }, [open, onClose])
-
-  const hasKey = apiKey.trim().length > 0
 
   return (
     <>
@@ -82,38 +98,26 @@ export default function Sidebar(props: SidebarProps) {
         {/* scrollable body */}
         <div className="flex-1 space-y-6 overflow-y-auto px-5 py-5">
 
-          {/* ---------- API KEY ---------- */}
-          <section className="space-y-3">
-            <SectionLabel>Groq API Key</SectionLabel>
-            <div className={`rounded-2xl border p-3.5 transition ${hasKey ? 'border-emerald-400/25 bg-emerald-400/[0.06]' : 'border-gold-dark/30 bg-gold-dark/[0.06]'}`}>
-              <label htmlFor="groq-key" className="flex items-center justify-between gap-2 text-xs font-bold text-text-dark">
-                <span className="inline-flex items-center gap-1.5"><KeyRound size={13} className="text-gold-dark" />Your Groq key</span>
-                <span className="inline-flex items-center gap-1 font-sans text-[10px] font-bold uppercase tracking-wide">
-                  {hasKey ? <><CheckCircle2 size={11} className="text-emerald-400" /><span className="text-emerald-400">Ready</span></> : <span className="text-[#ffb3a0]">Required</span>}
-                </span>
-              </label>
-              <div className="relative mt-2">
-                <input
-                  id="groq-key"
-                  type={revealKey ? 'text' : 'password'}
-                  value={apiKey}
-                  disabled={disabled}
-                  onChange={e => setApiKey(e.target.value)}
-                  placeholder="gsk_paste_your_key_here"
-                  autoComplete="new-password"
-                  spellCheck={false}
-                  className="w-full rounded-xl border border-white/12 bg-black/30 py-2.5 pl-3 pr-11 font-mono text-[12px] text-text-dark placeholder-text-dark-soft/40 outline-none transition focus:border-gold-dark/60 focus:ring-2 focus:ring-gold-dark/20 disabled:opacity-60"
-                />
-                <button type="button" onClick={() => setRevealKey(!revealKey)} aria-label={revealKey ? 'Hide key' : 'Show key'} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-text-dark-soft transition hover:bg-white/10 hover:text-text-dark">
-                  {revealKey ? <EyeOff size={15} /> : <Eye size={15} />}
-                </button>
-              </div>
-              <div className="mt-2.5 flex items-start justify-between gap-3">
-                <p className="max-w-[185px] text-[10.5px] font-medium leading-relaxed text-text-dark-soft">Kept in memory only. Reloading or closing this tab clears it.</p>
-                <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-bold text-gold-dark underline-offset-2 transition hover:text-gold hover:underline">Manage Groq keys<ExternalLink size={10} /></a>
-              </div>
-            </div>
-          </section>
+          <ProviderSettings
+            mode={providerMode}
+            onModeChange={setProviderMode}
+            activeProvider={activeProvider}
+            onActiveProviderChange={setActiveProvider}
+            priority={providerPriority}
+            onPriorityChange={setProviderPriority}
+            keys={providerKeys}
+            onKeyChange={setProviderKey}
+            models={providerModels}
+            onModelChange={setProviderModel}
+            catalogs={modelCatalogs}
+            statuses={providerStatuses}
+            errors={providerErrors}
+            consents={providerConsents}
+            onConsentChange={setProviderConsent}
+            onConnect={onConnectProvider}
+            onTest={onTestProvider}
+            disabled={disabled}
+          />
 
           {/* ---------- COVERAGE & BUDGET ---------- */}
           <section className="space-y-2.5">
@@ -150,25 +154,6 @@ export default function Sidebar(props: SidebarProps) {
               className="doclense-range w-full"
               style={{ ['--fill' as string]: `${((settings.maxChunks - 2) / 38) * 100}%` }}
             />
-          </section>
-
-          {/* ---------- MODEL ---------- */}
-          <section className="space-y-2.5">
-            <SectionLabel>Model</SectionLabel>
-            <div className="relative">
-              <Cpu size={15} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-persimmon-dark" />
-              <select
-                value={settings.model}
-                disabled={disabled}
-                onChange={e => updateSettings({ model: e.target.value })}
-                aria-label="Groq model"
-                className="w-full appearance-none rounded-xl border border-white/12 bg-black/30 py-2.5 pl-10 pr-9 text-[13px] font-semibold text-text-dark outline-none transition focus:border-persimmon-dark/60 focus:ring-2 focus:ring-persimmon-dark/20 disabled:opacity-60"
-              >
-                {GROQ_MODELS.map(m => <option key={m.id} value={m.id} className="bg-panel-dark text-text-dark">{m.label}</option>)}
-              </select>
-              <ChevronDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-text-dark-soft" />
-            </div>
-            <p className="px-1 text-[10.5px] font-medium text-text-dark-soft/80">{GROQ_MODELS.find(m => m.id === settings.model)?.note}</p>
           </section>
 
           {/* ---------- TEMPERATURE ---------- */}
@@ -315,7 +300,7 @@ export default function Sidebar(props: SidebarProps) {
 
         {/* footer badge */}
         <div className="border-t border-white/10 px-5 py-3">
-          <p className="flex items-center justify-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-dark-soft/60"><Zap size={11} className="text-gold-dark" />Powered by Groq · open-weight models</p>
+          <p className="flex items-center justify-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-dark-soft/60"><Zap size={11} className="text-gold-dark" />Provider-flexible · evidence checked</p>
         </div>
       </aside>
     </>
