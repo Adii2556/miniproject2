@@ -48,6 +48,43 @@ describe('Groq schema, evidence, and retry policy', () => {
     expect(result.summary?.evidenceStatus).toBe('verified')
   })
 
+  test('gives mapping and synthesis independent bounded evidence repairs', async () => {
+    const large = createTextDocument(`Durable evidence supports the finding. ${'context '.repeat(4_000)}`, 'large-evidence.txt')
+    const largeSourceId = large.blocks[0].id
+    let call = 0
+    const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      call += 1
+      const wrapper = JSON.parse(String(init.body)) as { payload: { messages: Array<{ content: string }>; temperature: number } }
+      if (call === 1 || call === 3) return Promise.resolve(response('not-json'))
+      if (call === 2) {
+        const chunkIds = [...wrapper.payload.messages[1].content.matchAll(/"chunkId":"([^"]+)"/g)].map(match => match[1])
+        return Promise.resolve(response({
+          digests: chunkIds.map(chunkId => ({
+            chunkId,
+            overview: 'The source contains durable evidence.',
+            claims: [{ text: 'Durable evidence supports the finding.', citations: [{ sourceId: largeSourceId, excerpt: 'Durable evidence supports the finding.' }] }],
+            keywords: ['durable evidence'],
+          })),
+        }))
+      }
+      return Promise.resolve(response({
+        title: 'Durable finding',
+        oneLiner: 'The evidence supports the finding.',
+        summary: { text: 'Durable evidence supports the finding.', citations: [{ sourceId: largeSourceId, excerpt: 'Durable evidence supports the finding.' }] },
+      }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await callGroq('gsk_test', { ...settings, analysisMode: 'sampled', maxChunks: 2 }, ['summary'], large)
+
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    for (const index of [1, 3]) {
+      const body = JSON.parse(String((fetchMock.mock.calls[index][1] as RequestInit).body)) as { payload: { temperature: number } }
+      expect(body.payload.temperature).toBe(0)
+    }
+    expect(result.summary?.evidenceStatus).toBe('verified')
+  })
+
   test('rejects two unsupported responses without rendering claims', async () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(response({ ...valid, summary: { text: 'Fabricated claim.', citations: [{ sourceId, excerpt: 'not present' }] } }))))
     await expect(callGroq('gsk_test', settings, ['summary'], document)).rejects.toMatchObject({ code: 'UNVERIFIED' })

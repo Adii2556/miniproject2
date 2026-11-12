@@ -172,8 +172,6 @@ interface ChunkDigest {
   sentiment?: SentimentResult
 }
 
-interface RetryBudget { remaining: number }
-
 const digestCache = new Map<string, ChunkDigest[]>()
 const MAX_DIGEST_CACHE_ENTRIES = 40
 
@@ -204,7 +202,6 @@ interface ValidatedRequestOptions<T> {
   maxTokens: number
   temperature: number
   signal?: AbortSignal
-  retryBudget: RetryBudget
   validate: (parsed: unknown) => T
   onRetry?: () => void
   onProviderEvent?: (event: ProviderEvent) => void
@@ -299,14 +296,15 @@ async function postAI(execution: AIExecutionConfig, messages: GroqMessage[], max
 async function requestValidated<T>(options: ValidatedRequestOptions<T>): Promise<{ value: T; rawText: string }> {
   let correction: GroqMessage[] = []
   let temperature = options.temperature
+  let repairsRemaining = 1
   for (;;) {
     const rawText = await postAI(options.execution, [...options.messages, ...correction], options.maxTokens, temperature, options.signal, options.onProviderEvent)
     try {
       return { value: options.validate(parseJsonLoose(rawText)), rawText }
     } catch (error) {
       const validationError = error instanceof ValidationFailure || error instanceof z.ZodError
-      if (!validationError || options.retryBudget.remaining <= 0) throw error
-      options.retryBudget.remaining -= 1
+      if (!validationError || repairsRemaining <= 0) throw error
+      repairsRemaining -= 1
       options.onRetry?.()
       correction = [
         { role: 'assistant', content: short(rawText, 4_000) },
@@ -315,6 +313,12 @@ async function requestValidated<T>(options: ValidatedRequestOptions<T>): Promise
       temperature = 0
     }
   }
+}
+
+function evidenceFailureMessage(error: unknown, stage: 'analysis' | 'notes'): string {
+  const reason = validationSummary(error)
+  const subject = stage === 'notes' ? 'source-backed notes' : 'an evidence-checked analysis'
+  return `The selected model could not produce ${subject}. ${reason} Try again, reduce the requested outputs, or choose a more capable model.`
 }
 
 function styleInstructions(settings: AnalysisSettings): string {
@@ -549,7 +553,6 @@ export async function callAI(
   }
   const selectedChunks = selectAnalysisChunks(allChunks, budget)
   const coverage = buildCoverage(allChunks, selectedChunks, budget)
-  const retryBudget: RetryBudget = { remaining: 1 }
   const totalCharacters = documents.reduce((sum, document) => sum + document.fullText.length, 0)
   let progressContext: Pick<AnalysisProgress, 'provider' | 'model'> = {}
   const onProviderEvent = (event: ProviderEvent) => {
@@ -568,14 +571,13 @@ export async function callAI(
         maxTokens: settings.maxTokens,
         temperature: settings.temperature,
         signal,
-        retryBudget,
         validate: parsed => normalizeAnalysis(parsed, sections, documents, directCoverage),
         onRetry: () => onProgress?.({ phase: 'retrying', completed: 0, total: 1, label: 'Checking evidence and retrying once…', ...progressContext }),
         onProviderEvent,
       })
       return { ...response.value, rawText: response.rawText, coverage: directCoverage }
     } catch (error) {
-      if (isValidationError(error)) throw new FriendlyError('The selected model could not produce an analysis with exact source evidence. Try again or choose a more capable model.', 'UNVERIFIED')
+      if (isValidationError(error)) throw new FriendlyError(evidenceFailureMessage(error, 'analysis'), 'UNVERIFIED')
       throw error
     }
   }
@@ -600,7 +602,6 @@ export async function callAI(
         maxTokens: Math.min(900, settings.maxTokens),
         temperature: Math.min(settings.temperature, 0.3),
         signal,
-        retryBudget,
         validate: parsed => validateChunkBatch(parsed, documents, new Set(batch.map(chunk => chunk.id))),
         onRetry: () => onProgress?.({ phase: 'retrying', completed, total: batches.length, label: 'Checking evidence and retrying once…', ...progressContext }),
         onProviderEvent,
@@ -622,7 +623,7 @@ export async function callAI(
     }
   })
   const digests = mappedBatches.flat()
-  if (digests.length === 0) throw new FriendlyError('The selected model could not produce source-backed notes for the selected documents.', 'UNVERIFIED')
+  if (digests.length === 0) throw new FriendlyError('The selected model could not produce source-backed notes for the selected documents. Try again, lower the chunk budget, or choose a more capable model.', 'UNVERIFIED')
   onProgress?.({ phase: 'synthesizing', completed: 0, total: 1, label: 'Combining verified evidence…', ...progressContext })
   try {
     const response = await requestValidated({
@@ -638,7 +639,6 @@ export async function callAI(
       maxTokens: settings.maxTokens,
       temperature: settings.temperature,
       signal,
-      retryBudget,
       validate: parsed => normalizeAnalysis(parsed, sections, documents, coverage),
       onRetry: () => onProgress?.({ phase: 'retrying', completed: 0, total: 1, label: 'Checking evidence and retrying once…', ...progressContext }),
       onProviderEvent,
@@ -646,7 +646,7 @@ export async function callAI(
     onProgress?.({ phase: 'synthesizing', completed: 1, total: 1, label: 'Evidence-checked analysis ready', ...progressContext })
     return { ...response.value, rawText: response.rawText, coverage }
   } catch (error) {
-    if (isValidationError(error)) throw new FriendlyError('The selected model could not produce an analysis with exact source evidence. Try again or choose a more capable model.', 'UNVERIFIED')
+    if (isValidationError(error)) throw new FriendlyError(evidenceFailureMessage(error, 'analysis'), 'UNVERIFIED')
     throw error
   }
 }
@@ -664,7 +664,6 @@ export async function askAI(
   const settings = normalizeSettings(settingsInput)
   const documents = coerceDocuments(input)
   if (!question.trim()) return { text: 'Enter a question about the selected documents.', citations: [], evidenceStatus: 'unavailable' }
-  const retryBudget: RetryBudget = { remaining: 1 }
   try {
     const response = await requestValidated({
       execution,
@@ -673,7 +672,6 @@ export async function askAI(
       maxTokens: Math.min(settings.maxTokens, 1_024),
       temperature: Math.min(settings.temperature, 0.3),
       signal,
-      retryBudget,
       validate: parsed => {
         const candidate = ChatAnswerSchema.parse(parsed)
         const text = short(candidate.text, 4_000)
