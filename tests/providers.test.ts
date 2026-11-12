@@ -2,11 +2,13 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
   discoverProviderModels,
   normalizeModelCatalog,
+  providerErrorCategory,
   runProviderCompletion,
   testProviderModel,
+  withModelCompatibility,
   type AIExecutionConfig,
 } from '../src/lib/aiProviders'
-import { handleAIRequest, proxyAIRequest } from '../server/aiProxy'
+import { handleAIRequest, proxyAIRequest, UPSTREAM_TIMEOUT_MS } from '../server/aiProxy'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -24,20 +26,30 @@ const validChatPayload = {
 describe('provider discovery and compatibility', () => {
   test('keeps likely chat models, marks unknown models, and filters known non-text models', () => {
     const models = normalizeModelCatalog({ data: [
-      { id: 'meta/llama-3.3-70b-instruct', context_window: 131_072, active: true },
+      { id: 'meta/llama-3.3-70b-instruct', context_window: 131_072, active: true, type: 'chat' },
+      { id: 'nvidia/nemotron-text-model', active: true },
       { id: 'vendor/new-model', active: true },
       { id: 'whisper-large-v3', active: true },
     ] })
     expect(models.find(model => model.id.includes('llama'))).toMatchObject({ compatibility: 'verified', contextWindow: 131_072 })
+    expect(models.find(model => model.id.includes('nemotron'))).toMatchObject({ compatibility: 'unverified' })
     expect(models.find(model => model.id === 'vendor/new-model')).toMatchObject({ compatibility: 'unverified' })
     expect(models.find(model => model.id.includes('whisper'))).toMatchObject({ compatibility: 'incompatible' })
+  })
+
+  test('promotes tested models and blocks failed manual model IDs', () => {
+    const promoted = withModelCompatibility([], 'nvidia/current-chat', 'verified', 'Compatibility test passed.')
+    expect(promoted[0]).toMatchObject({ id: 'nvidia/current-chat', compatibility: 'verified', structuredJson: true })
+
+    const blocked = withModelCompatibility(promoted, 'nvidia/current-chat', 'incompatible', 'Hosted chat is unavailable.')
+    expect(blocked[0]).toMatchObject({ compatibility: 'incompatible', reason: 'Hosted chat is unavailable.' })
   })
 
   test('discovers account-specific models through the same-origin gateway', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{ id: 'deepseek-chat', context_window: 128_000 }] }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     const models = await discoverProviderModels('deepseek', 'sk-test')
-    expect(models[0]).toMatchObject({ id: 'deepseek-chat', compatibility: 'verified' })
+    expect(models[0]).toMatchObject({ id: 'deepseek-chat', compatibility: 'unverified' })
     expect(fetchMock.mock.calls[0][0]).toBe('/api/ai')
     const request = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))
     expect(request).toEqual({ action: 'models', provider: 'deepseek' })
@@ -67,11 +79,38 @@ describe('provider discovery and compatibility', () => {
       payload: {
         model: 'nvidia/test-chat-model',
         temperature: 0,
-        max_tokens: 24,
+        max_tokens: 64,
         top_p: 1,
         response_format: { type: 'json_object' },
       },
     })
+  })
+
+  test('exposes only the safe provider failure category to compatibility state', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { category: 'model', message: 'NVIDIA NIM does not support the selected model for this request.' },
+    }), { status: 404 })))
+    let failure: unknown
+    try {
+      await testProviderModel({ provider: 'nvidia', apiKey: 'nvapi-test', model: 'nvidia/retired-model', consent: true })
+    } catch (error) {
+      failure = error
+    }
+    expect(providerErrorCategory(failure)).toBe('model')
+  })
+
+  test('rejects a model that ignores the required JSON response format', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: 'Compatible.' } }],
+    }), { status: 200 })))
+    let failure: unknown
+    try {
+      await testProviderModel({ provider: 'nvidia', apiKey: 'nvapi-test', model: 'nvidia/plain-text-model', consent: true })
+    } catch (error) {
+      failure = error
+    }
+    expect(providerErrorCategory(failure)).toBe('request')
+    expect(failure).toMatchObject({ message: 'NVIDIA NIM did not return the required JSON format.' })
   })
 })
 describe('provider fallback and proxy privacy', () => {
@@ -92,6 +131,26 @@ describe('provider fallback and proxy privacy', () => {
     expect(result).toMatchObject({ provider: 'nvidia', model: 'meta/llama-instruct', content: '{"ok":true}' })
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(events).toContain('fallback')
+  })
+
+  test('falls back after an upstream timeout without repeating the slow provider', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { category: 'temporary', message: 'NVIDIA NIM took too long to respond.' } }), { status: 504 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const execution: AIExecutionConfig = {
+      mode: 'automatic', activeProvider: 'nvidia', priority: ['nvidia', 'groq', 'deepseek', 'openai'],
+      providers: {
+        nvidia: { provider: 'nvidia', apiKey: 'nvapi-test', model: 'nvidia/slow-model', consent: true },
+        groq: { provider: 'groq', apiKey: 'gsk-test', model: 'llama-chat', consent: true },
+      },
+    }
+    const events: string[] = []
+    const result = await runProviderCompletion(execution, [{ role: 'user', content: 'Return JSON.' }], { maxTokens: 32, temperature: 0, onEvent: event => events.push(event.type) })
+    expect(result.provider).toBe('groq')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(events).toContain('fallback')
+    expect(events).not.toContain('retry')
   })
 
   test('forwards credentials only as a transient authorization header and sanitizes errors', async () => {
@@ -153,7 +212,7 @@ describe('provider fallback and proxy privacy', () => {
     }))
     vi.stubGlobal('fetch', stalled)
     const request = proxyAIRequest({ action: 'models', provider: 'openai' }, 'sk-test')
-    await vi.advanceTimersByTimeAsync(45_000)
+    await vi.advanceTimersByTimeAsync(UPSTREAM_TIMEOUT_MS)
     await expect(request).resolves.toMatchObject({ status: 504 })
   })
 })

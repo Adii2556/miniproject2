@@ -55,7 +55,7 @@ const MAX_MESSAGE_CHARS = 500_000
 const MAX_TOTAL_MESSAGE_CHARS = 1_500_000
 const MAX_MESSAGES = 64
 const MAX_UPSTREAM_RESPONSE_BYTES = 5_000_000
-const UPSTREAM_TIMEOUT_MS = 45_000
+export const UPSTREAM_TIMEOUT_MS = 120_000
 const RATE_LIMIT_WINDOW_MS = 60_000
 const RATE_LIMIT_REQUESTS = 120
 const MAX_CLIENT_CONCURRENCY = 4
@@ -81,7 +81,7 @@ function classifyError(status: number, value: unknown): string {
   if (status === 429) return /(?:quota|billing|credit|balance)/.test(text) ? 'quota' : 'rate_limit'
   if (status === 408 || status === 409 || status === 425 || status >= 500) return 'temporary'
   if (status === 413) return 'context'
-  if (status === 404 || /model.{0,30}(?:not found|does not exist|unsupported)/.test(text)) return 'model'
+  if (status === 404 || /model.{0,40}(?:not found|does not exist|unsupported|unavailable|deprecated)/.test(text)) return 'model'
   return 'request'
 }
 

@@ -123,6 +123,7 @@ export default function ProviderSettings(props: ProviderSettingsProps) {
           <div>
             <p className={`text-[10.5px] font-bold ${indicator.className}`}>{indicator.label}</p>
             <p className="mt-0.5 text-[9.5px] leading-relaxed text-text-dark-soft/75">{selected?.contextWindow ? `${selected.contextWindow.toLocaleString()} context` : 'Context limit not reported'}{selected?.maxOutputTokens ? ` · ${selected.maxOutputTokens.toLocaleString()} max output` : ''}</p>
+            {selected?.reason ? <p className="mt-1 max-w-[220px] text-[9.5px] leading-relaxed text-text-dark-soft/80">{selected.reason}</p> : null}
           </div>
           <button type="button" disabled={disabled || !keys[activeProvider].trim() || !models[activeProvider].trim() || !consents[activeProvider]} onClick={() => onTest(activeProvider)} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-white/12 px-2 py-1 text-[9.5px] font-bold text-text-dark-soft hover:text-text-dark disabled:opacity-40"><TestTube2 size={11} />Test</button>
         </div>

@@ -36,7 +36,7 @@ describe('security regression boundaries', () => {
     expect(client).not.toMatch(/body:\s*JSON\.stringify\([^)]*apiKey/)
     expect(gateway).toContain('sameOriginRequest')
     expect(gateway).toContain('validateChatPayload')
-    expect(gateway).toContain('UPSTREAM_TIMEOUT_MS = 45_000')
+    expect(gateway).toContain('UPSTREAM_TIMEOUT_MS = 120_000')
     expect(gateway).toContain('MAX_UPSTREAM_RESPONSE_BYTES = 5_000_000')
   })
 })

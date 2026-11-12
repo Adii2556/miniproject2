@@ -27,7 +27,7 @@ import {
 } from './aiProviders'
 import { serializeUntrustedDocument } from './documentSecurity'
 
-const REQUEST_TIMEOUT_MS = 45_000
+const REQUEST_TIMEOUT_MS = 135_000
 const MAX_QUESTION_CHARS = 2_000
 const MAX_HISTORY_MESSAGE_CHARS = 4_000
 

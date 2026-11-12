@@ -23,8 +23,10 @@ import {
 import {
   DEFAULT_PROVIDER_ORDER,
   discoverProviderModels,
+  providerErrorCategory,
   providerDefinition,
   testProviderModel,
+  withModelCompatibility,
   type AIExecutionConfig,
   type ModelMetadata,
   type ProviderId,
@@ -40,7 +42,7 @@ import type { OcrProgress } from '../lib/ocr'
 
 const LS_SETTINGS = 'doclense.settings.v1'
 const LS_PROVIDER_SETTINGS = 'doclense.providers.v1'
-const MODEL_CACHE_PREFIX = 'doclense.model-catalog.v1.'
+const MODEL_CACHE_PREFIX = 'doclense.model-catalog.v2.'
 const MODEL_CACHE_MS = 15 * 60 * 1000
 const MAX_FILE_MB = 15
 const CHAT_LIMIT = 2000
@@ -141,6 +143,10 @@ function loadCachedCatalog(provider: ProviderId): ModelMetadata[] {
   } catch { return [] }
 }
 
+function saveCachedCatalog(provider: ProviderId, models: ModelMetadata[]): void {
+  try { sessionStorage.setItem(`${MODEL_CACHE_PREFIX}${provider}`, JSON.stringify({ savedAt: Date.now(), models })) } catch { /* ignore */ }
+}
+
 const UPLOAD_STAGES = ['Validating file…', 'Reading document…', 'Extracting text…', 'Computing statistics…']
 const GEN_STAGES = ['Reading the document…', 'Drafting your summary…', 'Extracting keywords…', 'Gauging sentiment…', 'Writing quiz questions…', 'Polishing the details…']
 const SUGGESTIONS = ['What is the main argument of this document?', 'Who is the intended audience?', 'What are the strongest counterarguments or risks?']
@@ -189,7 +195,10 @@ export default function AppShell() {
       compatibility: modelCatalogs[provider]?.find(model => model.id === providerModels[provider])?.compatibility ?? 'unverified',
     }])),
   }), [activeProvider, modelCatalogs, providerConsents, providerKeys, providerMode, providerModels, providerPriority])
-  const providerIsReady = useCallback((provider: ProviderId) => Boolean(providerKeys[provider].trim() && providerModels[provider].trim() && providerConsents[provider]), [providerConsents, providerKeys, providerModels])
+  const providerIsReady = useCallback((provider: ProviderId) => {
+    const compatibility = modelCatalogs[provider]?.find(model => model.id === providerModels[provider])?.compatibility
+    return Boolean(providerKeys[provider].trim() && providerModels[provider].trim() && providerConsents[provider] && compatibility !== 'incompatible')
+  }, [modelCatalogs, providerConsents, providerKeys, providerModels])
   const activeReady = providerMode === 'manual' ? providerIsReady(activeProvider) : providerPriority.some(providerIsReady)
 
   // ---------- document state ----------
@@ -265,7 +274,7 @@ export default function AppShell() {
     try {
       const models = await discoverProviderModels(provider, key)
       setModelCatalogs(current => ({ ...current, [provider]: models }))
-      try { sessionStorage.setItem(`${MODEL_CACHE_PREFIX}${provider}`, JSON.stringify({ savedAt: Date.now(), models })) } catch { /* ignore */ }
+      saveCachedCatalog(provider, models)
       setProviderStatuses(current => ({ ...current, [provider]: 'ready' }))
       if (!providerModels[provider]) {
         const recommended = models.find(model => model.compatibility === 'verified') ?? models.find(model => model.compatibility === 'unverified')
@@ -280,17 +289,32 @@ export default function AppShell() {
   }, [providerConsents, providerKeys, providerModels, pushToast])
 
   const testProvider = useCallback(async (provider: ProviderId) => {
+    const modelId = providerModels[provider]
     try {
-      await testProviderModel({ provider, apiKey: providerKeys[provider], model: providerModels[provider], consent: providerConsents[provider] })
-      setModelCatalogs(current => ({ ...current, [provider]: (current[provider] ?? []).map(model => model.id === providerModels[provider] ? { ...model, compatibility: 'verified', reason: 'A lightweight JSON chat request succeeded.' } : model) }))
+      await testProviderModel({ provider, apiKey: providerKeys[provider], model: modelId, consent: providerConsents[provider] })
+      const models = withModelCompatibility(modelCatalogs[provider] ?? [], modelId, 'verified', 'A lightweight JSON chat request succeeded.')
+      setModelCatalogs(current => ({ ...current, [provider]: models }))
+      saveCachedCatalog(provider, models)
       setProviderStatuses(current => ({ ...current, [provider]: 'ready' }))
+      setProviderErrors(current => ({ ...current, [provider]: undefined }))
       pushToast(`${providerDefinition(provider).label} model compatibility confirmed`)
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'The compatibility test failed.'
+      const category = providerErrorCategory(error)
+      const incompatible = category === 'model' || category === 'request'
+      const baseMessage = error instanceof Error ? error.message : 'The compatibility test failed.'
+      const message = incompatible ? `${baseMessage} Choose another model and run Test.` : baseMessage
+      if (incompatible) {
+        const reason = category === 'model'
+          ? 'The provider reports that this model is unavailable for hosted chat requests.'
+          : 'This model rejected the JSON chat format required for evidence-checked analysis.'
+        const models = withModelCompatibility(modelCatalogs[provider] ?? [], modelId, 'incompatible', reason)
+        setModelCatalogs(current => ({ ...current, [provider]: models }))
+        saveCachedCatalog(provider, models)
+      }
       setProviderErrors(current => ({ ...current, [provider]: message }))
       pushToast(message, 'error')
     }
-  }, [providerConsents, providerKeys, providerModels, pushToast])
+  }, [modelCatalogs, providerConsents, providerKeys, providerModels, pushToast])
 
   const changeActiveProvider = useCallback((provider: ProviderId) => {
     setActiveProvider(provider)
@@ -299,6 +323,7 @@ export default function AppShell() {
 
   const changeProviderModel = useCallback((provider: ProviderId, model: string) => {
     setProviderModels(current => ({ ...current, [provider]: model }))
+    setProviderErrors(current => ({ ...current, [provider]: undefined }))
     if (provider === activeProvider) setSettings(current => normalizeSettings({ ...current, model }))
   }, [activeProvider])
 
@@ -515,7 +540,8 @@ export default function AppShell() {
       return
     }
     if (!activeReady) {
-      pushToast(`Configure ${providerDefinition(activeProvider).label}, choose a model, and allow API usage first`, 'error')
+      const incompatible = providerMode === 'manual' && execution.providers[activeProvider]?.compatibility === 'incompatible'
+      pushToast(incompatible ? 'Choose a compatible model and run Test before analysis.' : `Configure ${providerDefinition(activeProvider).label}, choose a model, and allow API usage first`, 'error')
       setSidebarOpen(true)
       return
     }
@@ -563,7 +589,7 @@ export default function AppShell() {
         setAnalysisProgress(null)
       }
     }
-  }, [uploaded, generating, selectedDocuments, sections, activeReady, activeProvider, execution, settings, pinToTop, pushToast, workspaceStats.words])
+  }, [uploaded, generating, selectedDocuments, sections, activeReady, activeProvider, providerMode, execution, settings, pinToTop, pushToast, workspaceStats.words])
 
   // ---------- chat ----------
   const askQuestion = useCallback(async (question: string) => {
@@ -574,7 +600,8 @@ export default function AppShell() {
       return
     }
     if (!activeReady) {
-      pushToast(`Configure ${providerDefinition(activeProvider).label} in the sidebar first`, 'error')
+      const incompatible = providerMode === 'manual' && execution.providers[activeProvider]?.compatibility === 'incompatible'
+      pushToast(incompatible ? 'Choose a compatible model and run Test before asking a question.' : `Configure ${providerDefinition(activeProvider).label} in the sidebar first`, 'error')
       setSidebarOpen(true)
       return
     }
@@ -598,7 +625,7 @@ export default function AppShell() {
         setAskLoading(false)
       }
     }
-  }, [uploaded, selectedDocuments, askLoading, activeReady, activeProvider, execution, settings, messages, pushToast])
+  }, [uploaded, selectedDocuments, askLoading, activeReady, activeProvider, providerMode, execution, settings, messages, pushToast])
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })

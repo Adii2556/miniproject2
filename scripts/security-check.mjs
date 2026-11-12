@@ -33,7 +33,7 @@ assertPresent(headers, /Cross-Origin-Opener-Policy: same-origin/, 'Opener isolat
 const gatewaySource = read('server/aiProxy.ts')
 assertPresent(gatewaySource, /sameOriginRequest/, 'Provider gateway same-origin validation is missing.')
 assertPresent(gatewaySource, /validateChatPayload/, 'Provider gateway request schema validation is missing.')
-assertPresent(gatewaySource, /UPSTREAM_TIMEOUT_MS\s*=\s*45_000/, 'Provider gateway timeout is missing.')
+assertPresent(gatewaySource, /UPSTREAM_TIMEOUT_MS\s*=\s*120_000/, 'Provider gateway timeout is missing.')
 assertPresent(gatewaySource, /MAX_UPSTREAM_RESPONSE_BYTES\s*=\s*5_000_000/, 'Provider response-size limit is missing.')
 assertPresent(gatewaySource, /MAX_CLIENT_CONCURRENCY\s*=\s*4/, 'Provider gateway per-client concurrency limit is missing.')
 assertAbsent(gatewaySource, /fetch\(\s*(?:input|payload|request)/, 'Provider gateway may fetch a client-controlled URL.')

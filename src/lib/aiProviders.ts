@@ -86,9 +86,9 @@ export function normalizeModelCatalog(payload: unknown): ModelMetadata[] {
     const id = raw.id.trim()
     const active = raw.active
     const incompatible = active === false || incompatiblePattern.test(id)
+    const likelyTextByName = likelyChatPattern.test(id)
     const verifiedByMetadata = !incompatible && (
-      likelyChatPattern.test(id)
-      || raw.type === 'chat'
+      raw.type === 'chat'
       || raw.endpoint === 'chat.completions'
       || (Array.isArray(raw.capabilities) && raw.capabilities.some(value => String(value).toLocaleLowerCase().includes('chat')))
     )
@@ -104,14 +104,34 @@ export function normalizeModelCatalog(payload: unknown): ModelMetadata[] {
       reason: incompatible
         ? 'Catalog metadata or model type indicates this is not a text chat model.'
         : verifiedByMetadata
-          ? 'Catalog metadata or model family indicates text/chat suitability.'
-          : 'The provider catalog does not expose enough capability data; test before analysis.',
+          ? 'Provider metadata confirms chat-completion support.'
+          : likelyTextByName
+            ? 'The model name suggests text/chat use, but the catalog does not confirm JSON support. Run Test before analysis.'
+            : 'The provider catalog does not expose enough capability data. Run Test before analysis.',
       discoveredAt: now,
     } satisfies ModelMetadata]
   }).sort((a, b) => {
     const rank = { verified: 0, unverified: 1, incompatible: 2 }
     return rank[a.compatibility] - rank[b.compatibility] || a.label.localeCompare(b.label)
   })
+}
+
+export function withModelCompatibility(
+  catalog: ModelMetadata[],
+  modelId: string,
+  compatibility: ModelCompatibility,
+  reason: string,
+): ModelMetadata[] {
+  const id = modelId.trim()
+  if (!id) return catalog
+  const existing = catalog.find(model => model.id === id)
+  const updated: ModelMetadata = {
+    ...(existing ?? { id, label: id, discoveredAt: Date.now() }),
+    compatibility,
+    structuredJson: compatibility === 'verified' ? true : compatibility === 'incompatible' ? false : existing?.structuredJson,
+    reason,
+  }
+  return existing ? catalog.map(model => model.id === id ? updated : model) : [...catalog, updated]
 }
 
 class ProviderRequestError extends Error {
@@ -124,6 +144,10 @@ class ProviderRequestError extends Error {
     super(message)
     this.name = 'ProviderRequestError'
   }
+}
+
+export function providerErrorCategory(error: unknown): ProviderRequestError['category'] | undefined {
+  return error instanceof ProviderRequestError ? error.category : undefined
 }
 
 interface ProxyErrorBody { error?: { category?: string; message?: string } }
@@ -183,12 +207,12 @@ export async function discoverProviderModels(provider: ProviderId, apiKey: strin
 }
 
 export async function testProviderModel(runtime: ProviderRuntime, signal?: AbortSignal): Promise<void> {
-  await proxyRequest({
+  const response = await proxyRequest({
     action: 'chat', provider: runtime.provider,
     payload: {
       model: runtime.model,
       temperature: 0,
-      max_tokens: 24,
+      max_tokens: 64,
       top_p: 1,
       response_format: { type: 'json_object' },
       messages: [
@@ -196,7 +220,14 @@ export async function testProviderModel(runtime: ProviderRuntime, signal?: Abort
         { role: 'user', content: 'Return {"compatible":true}.' },
       ],
     },
-  }, runtime.apiKey, signal)
+  }, runtime.apiKey, signal) as { choices?: Array<{ message?: { content?: string } }> }
+  const content = response.choices?.[0]?.message?.content?.trim() ?? ''
+  try {
+    const parsed = JSON.parse(content.replace(/^```(?:json)?\s*/i, '').replace(/```$/i, '').trim()) as { compatible?: unknown }
+    if (parsed.compatible !== true) throw new Error('missing compatibility result')
+  } catch {
+    throw new ProviderRequestError(`${providerDefinition(runtime.provider).label} did not return the required JSON format.`, 'request', 422)
+  }
 }
 
 function validateKey(value: string): string {
@@ -306,7 +337,7 @@ export async function runProviderCompletion(
         if ((error as Error).name === 'AbortError') throw error
         finalError = error
         const providerError = error instanceof ProviderRequestError ? error : new ProviderRequestError('Provider request failed.', 'network', 0)
-        const retryable = providerError.category === 'rate_limit' || providerError.category === 'temporary' || providerError.category === 'network'
+        const retryable = providerError.status !== 504 && (providerError.category === 'rate_limit' || providerError.category === 'temporary' || providerError.category === 'network')
         if (!retryable || attempt === 2) break
         const delay = providerError.retryAfterMs || Math.min(8_000, 750 * (2 ** attempt) + Math.floor(Math.random() * 250))
         options.onEvent?.({ type: 'retry', provider: runtime.provider, model: runtime.model, delayMs: delay, message: `${providerDefinition(runtime.provider).label} will retry in ${Math.ceil(delay / 1_000)}s` })
