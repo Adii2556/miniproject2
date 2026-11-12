@@ -75,9 +75,11 @@ describe('Groq schema, evidence, and retry policy', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const result = await callGroq('gsk_test', { ...settings, analysisMode: 'sampled', maxChunks: 2 }, ['summary'], large)
+    const result = await callGroq('gsk_test', { ...settings, analysisMode: 'sampled', maxChunks: 2, maxTokens: 3_072 }, ['summary'], large)
 
     expect(fetchMock).toHaveBeenCalledTimes(4)
+    const mappingBody = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body)) as { payload: { max_tokens: number } }
+    expect(mappingBody.payload.max_tokens).toBe(1_600)
     for (const index of [1, 3]) {
       const body = JSON.parse(String((fetchMock.mock.calls[index][1] as RequestInit).body)) as { payload: { temperature: number } }
       expect(body.payload.temperature).toBe(0)

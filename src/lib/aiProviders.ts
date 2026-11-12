@@ -137,7 +137,7 @@ export function withModelCompatibility(
 class ProviderRequestError extends Error {
   constructor(
     message: string,
-    readonly category: 'auth' | 'quota' | 'rate_limit' | 'temporary' | 'context' | 'model' | 'request' | 'network',
+    readonly category: 'auth' | 'quota' | 'rate_limit' | 'temporary' | 'output' | 'context' | 'model' | 'request' | 'network',
     readonly status: number,
     readonly retryAfterMs = 0,
   ) {
@@ -193,7 +193,7 @@ async function proxyRequest(body: Record<string, unknown>, apiKey: string, signa
           : response.status === 413
             ? 'context'
             : response.status >= 500 ? 'temporary' : 'request'
-    const category = ['auth', 'quota', 'rate_limit', 'temporary', 'context', 'model', 'request'].includes(rawCategory ?? '')
+    const category = ['auth', 'quota', 'rate_limit', 'temporary', 'output', 'context', 'model', 'request'].includes(rawCategory ?? '')
       ? rawCategory as ProviderRequestError['category']
       : inferredCategory
     throw new ProviderRequestError(safe?.error?.message ?? `Provider request failed (${response.status}).`, category, response.status, retryAfterMs(response.headers.get('retry-after')))
@@ -337,7 +337,7 @@ export async function runProviderCompletion(
         if ((error as Error).name === 'AbortError') throw error
         finalError = error
         const providerError = error instanceof ProviderRequestError ? error : new ProviderRequestError('Provider request failed.', 'network', 0)
-        const retryable = providerError.status !== 504 && (providerError.category === 'rate_limit' || providerError.category === 'temporary' || providerError.category === 'network')
+        const retryable = providerError.status !== 504 && (providerError.category === 'rate_limit' || providerError.category === 'temporary' || providerError.category === 'output' || providerError.category === 'network')
         if (!retryable || attempt === 2) break
         const delay = providerError.retryAfterMs || Math.min(8_000, 750 * (2 ** attempt) + Math.floor(Math.random() * 250))
         options.onEvent?.({ type: 'retry', provider: runtime.provider, model: runtime.model, delayMs: delay, message: `${providerDefinition(runtime.provider).label} will retry in ${Math.ceil(delay / 1_000)}s` })
@@ -348,13 +348,14 @@ export async function runProviderCompletion(
   throw finalError ?? new ProviderRequestError('No configured provider could complete the request.', 'request', 0)
 }
 
-export function providerErrorDetails(error: unknown): { code: 'AUTH' | 'QUOTA' | 'RATE_LIMIT' | 'NETWORK' | 'SERVER' | 'TOO_BIG' | 'UNKNOWN'; message: string } {
+export function providerErrorDetails(error: unknown): { code: 'AUTH' | 'QUOTA' | 'RATE_LIMIT' | 'NETWORK' | 'SERVER' | 'BAD_JSON' | 'TOO_BIG' | 'UNKNOWN'; message: string } {
   if (!(error instanceof ProviderRequestError)) return { code: 'UNKNOWN', message: 'The AI provider request failed.' }
   if (error.category === 'auth') return { code: 'AUTH', message: error.message }
   if (error.category === 'quota') return { code: 'QUOTA', message: error.message }
   if (error.category === 'rate_limit') return { code: 'RATE_LIMIT', message: error.message }
   if (error.category === 'network') return { code: 'NETWORK', message: error.message }
   if (error.category === 'temporary') return { code: 'SERVER', message: error.message }
+  if (error.category === 'output') return { code: 'BAD_JSON', message: error.message }
   if (error.category === 'context') return { code: 'TOO_BIG', message: error.message }
   return { code: 'UNKNOWN', message: error.message }
 }

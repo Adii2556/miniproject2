@@ -153,6 +153,24 @@ describe('provider fallback and proxy privacy', () => {
     expect(events).not.toContain('retry')
   })
 
+  test('retries a structured-output generation failure instead of treating it as a permanent 400', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: { category: 'output', message: 'Groq could not produce valid structured JSON for this request.' },
+      }), { status: 400, headers: { 'Retry-After': '0.001' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const execution: AIExecutionConfig = {
+      mode: 'manual', activeProvider: 'groq', priority: ['groq'],
+      providers: { groq: { provider: 'groq', apiKey: 'gsk-test', model: 'openai/gpt-oss-20b', consent: true } },
+    }
+    const events: string[] = []
+    const result = await runProviderCompletion(execution, [{ role: 'user', content: 'Return JSON.' }], { maxTokens: 1_600, temperature: 0.2, onEvent: event => events.push(event.type) })
+    expect(result.content).toBe('{"ok":true}')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(events).toContain('retry')
+  })
+
   test('forwards credentials only as a transient authorization header and sanitizes errors', async () => {
     const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { message: 'invalid sk-super-secret' } }), { status: 401 }))
     vi.stubGlobal('fetch', upstream)
@@ -199,6 +217,23 @@ describe('provider fallback and proxy privacy', () => {
     expect(forwarded).toEqual(validChatPayload)
     expect(forwarded).not.toHaveProperty('stream')
     expect(forwarded).not.toHaveProperty('user')
+  })
+
+  test('classifies and sanitizes provider JSON-generation failures', async () => {
+    const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: {
+        code: 'json_validate_failed',
+        message: 'Failed to generate JSON. See failed_generation.',
+        failed_generation: 'private document text',
+      },
+    }), { status: 400 }))
+    vi.stubGlobal('fetch', upstream)
+    const result = await proxyAIRequest({ action: 'chat', provider: 'groq', payload: validChatPayload }, 'gsk-test')
+    expect(result).toMatchObject({
+      status: 400,
+      body: { error: { category: 'output', message: 'Groq could not produce valid structured JSON for this request.' } },
+    })
+    expect(JSON.stringify(result.body)).not.toContain('private document text')
   })
 
   test('bounds oversized and stalled upstream responses without leaking provider data', async () => {

@@ -79,6 +79,7 @@ function classifyError(status: number, value: unknown): string {
   if (status === 401 || status === 403) return 'auth'
   if (status === 402 || /(?:insufficient|exhausted).{0,30}(?:credit|quota|balance)/.test(text)) return 'quota'
   if (status === 429) return /(?:quota|billing|credit|balance)/.test(text) ? 'quota' : 'rate_limit'
+  if ((status === 400 || status === 422) && /(?:failed_generation|json_validate_failed|failed to generate json|generated json does not match)/.test(text)) return 'output'
   if (status === 408 || status === 409 || status === 425 || status >= 500) return 'temporary'
   if (status === 413) return 'context'
   if (status === 404 || /model.{0,40}(?:not found|does not exist|unsupported|unavailable|deprecated)/.test(text)) return 'model'
@@ -198,6 +199,7 @@ function safeUpstreamMessage(target: ProviderTarget, status: number, category: s
   if (category === 'quota') return `${target.label} reports that the account quota or credits are exhausted.`
   if (category === 'rate_limit') return `${target.label} is rate limiting requests.`
   if (category === 'temporary') return `${target.label} is temporarily unavailable.`
+  if (category === 'output') return `${target.label} could not produce valid structured JSON for this request.`
   if (category === 'context') return `${target.label} rejected the request size.`
   if (category === 'model') return `${target.label} does not support the selected model for this request.`
   return `${target.label} rejected the request (${status}).`

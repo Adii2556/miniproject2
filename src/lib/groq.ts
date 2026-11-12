@@ -599,7 +599,7 @@ export async function callAI(
         execution,
         settings,
         messages: chunkMapMessages(settings, batch),
-        maxTokens: Math.min(900, settings.maxTokens),
+        maxTokens: Math.min(1_600, settings.maxTokens),
         temperature: Math.min(settings.temperature, 0.3),
         signal,
         validate: parsed => validateChunkBatch(parsed, documents, new Set(batch.map(chunk => chunk.id))),
