@@ -206,13 +206,28 @@ export async function discoverProviderModels(provider: ProviderId, apiKey: strin
   return normalizeModelCatalog(payload)
 }
 
+function parseCompatibilityResult(content: string): boolean {
+  const cleaned = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim()
+  const candidates = [cleaned]
+  const start = cleaned.indexOf('{')
+  const end = cleaned.lastIndexOf('}')
+  if (start !== -1 && end > start) candidates.push(cleaned.slice(start, end + 1))
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as { compatible?: unknown }
+      if (parsed.compatible === true) return true
+    } catch { /* try the extracted object */ }
+  }
+  return false
+}
+
 export async function testProviderModel(runtime: ProviderRuntime, signal?: AbortSignal): Promise<void> {
   const response = await proxyRequest({
     action: 'chat', provider: runtime.provider,
     payload: {
       model: runtime.model,
       temperature: 0,
-      max_tokens: 64,
+      max_tokens: 256,
       top_p: 1,
       response_format: { type: 'json_object' },
       messages: [
@@ -220,14 +235,14 @@ export async function testProviderModel(runtime: ProviderRuntime, signal?: Abort
         { role: 'user', content: 'Return {"compatible":true}.' },
       ],
     },
-  }, runtime.apiKey, signal) as { choices?: Array<{ message?: { content?: string } }> }
+  }, runtime.apiKey, signal) as { choices?: Array<{ finish_reason?: string; message?: { content?: string } }> }
   const content = response.choices?.[0]?.message?.content?.trim() ?? ''
-  try {
-    const parsed = JSON.parse(content.replace(/^```(?:json)?\s*/i, '').replace(/```$/i, '').trim()) as { compatible?: unknown }
-    if (parsed.compatible !== true) throw new Error('missing compatibility result')
-  } catch {
-    throw new ProviderRequestError(`${providerDefinition(runtime.provider).label} did not return the required JSON format.`, 'request', 422)
-  }
+  if (parseCompatibilityResult(content)) return
+  const endedEarly = response.choices?.[0]?.finish_reason === 'length' || !content
+  const message = endedEarly
+    ? `${providerDefinition(runtime.provider).label} ended the test before returning JSON. Run Test again; if it repeats, choose another model.`
+    : `${providerDefinition(runtime.provider).label} returned a non-JSON test response. Run Test again; if it repeats, choose another model.`
+  throw new ProviderRequestError(message, 'output', 422)
 }
 
 function validateKey(value: string): string {

@@ -79,7 +79,7 @@ describe('provider discovery and compatibility', () => {
       payload: {
         model: 'nvidia/test-chat-model',
         temperature: 0,
-        max_tokens: 64,
+        max_tokens: 256,
         top_p: 1,
         response_format: { type: 'json_object' },
       },
@@ -99,7 +99,14 @@ describe('provider discovery and compatibility', () => {
     expect(providerErrorCategory(failure)).toBe('model')
   })
 
-  test('rejects a model that ignores the required JSON response format', async () => {
+  test('accepts a compatible JSON object after provider reasoning text', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: 'Reasoning complete.\n```json\n{"compatible":true}\n```' } }],
+    }), { status: 200 })))
+    await expect(testProviderModel({ provider: 'nvidia', apiKey: 'nvapi-test', model: 'nvidia/reasoning-model', consent: true })).resolves.toBeUndefined()
+  })
+
+  test('treats a non-JSON probe as retryable instead of permanently blocking the model', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       choices: [{ message: { content: 'Compatible.' } }],
     }), { status: 200 })))
@@ -109,8 +116,22 @@ describe('provider discovery and compatibility', () => {
     } catch (error) {
       failure = error
     }
-    expect(providerErrorCategory(failure)).toBe('request')
-    expect(failure).toMatchObject({ message: 'NVIDIA NIM did not return the required JSON format.' })
+    expect(providerErrorCategory(failure)).toBe('output')
+    expect(failure).toMatchObject({ message: 'NVIDIA NIM returned a non-JSON test response. Run Test again; if it repeats, choose another model.' })
+  })
+
+  test('explains a compatibility probe that exhausts its output budget', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ finish_reason: 'length', message: { content: '' } }],
+    }), { status: 200 })))
+    let failure: unknown
+    try {
+      await testProviderModel({ provider: 'nvidia', apiKey: 'nvapi-test', model: 'nvidia/reasoning-model', consent: true })
+    } catch (error) {
+      failure = error
+    }
+    expect(providerErrorCategory(failure)).toBe('output')
+    expect(failure).toMatchObject({ message: 'NVIDIA NIM ended the test before returning JSON. Run Test again; if it repeats, choose another model.' })
   })
 })
 describe('provider fallback and proxy privacy', () => {
