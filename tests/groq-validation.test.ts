@@ -12,6 +12,7 @@ const settings: AnalysisSettings = {
   analysisMode: 'complete',
   maxChunks: 8,
   quizDifficulty: 'adaptive',
+  quizQuestions: 5,
 }
 
 const document = createTextDocument('Verified evidence establishes the central finding.', 'evidence.txt')
@@ -46,6 +47,28 @@ describe('Groq schema, evidence, and retry policy', () => {
     expect(retryBody.payload.temperature).toBe(0)
     expect(retryBody.payload.messages.at(-1)?.content).toContain('failed validation')
     expect(result.summary?.evidenceStatus).toBe('verified')
+  })
+
+  test('repairs a quiz until it contains the selected number of verified questions', async () => {
+    const question = (index: number) => ({
+      question: `What does the verified evidence establish in item ${index + 1}?`,
+      options: ['The central finding', 'An unrelated claim', 'No finding', 'A contradiction'],
+      answer: 0,
+      explanation: 'Verified evidence establishes the central finding.',
+      difficulty: 'easy',
+      citations: [{ sourceId, excerpt: 'Verified evidence establishes the central finding.' }],
+    })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ quiz: Array.from({ length: 4 }, (_, index) => question(index)) }))
+      .mockResolvedValueOnce(response({ quiz: Array.from({ length: 5 }, (_, index) => question(index)) }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await callGroq('gsk_test', settings, ['quiz'], document)
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(result.quiz).toHaveLength(5)
+    const retryBody = JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body)) as { payload: { messages: Array<{ content: string }> } }
+    expect(retryBody.payload.messages.at(-1)?.content).toContain('expected exactly 5')
   })
 
   test('gives mapping and synthesis independent bounded evidence repairs', async () => {

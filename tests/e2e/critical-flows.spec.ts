@@ -114,10 +114,13 @@ test.describe('evidence-first workspace', () => {
 
     await outputPreferences.click()
     await page.getByRole('radio', { name: 'Detailed' }).click()
+    await page.getByRole('radio', { name: '10 questions' }).click()
     await expect(page.getByRole('radio', { name: 'Detailed' })).toHaveAttribute('aria-checked', 'true')
+    await expect(page.getByRole('radio', { name: '10 questions' })).toHaveAttribute('aria-checked', 'true')
     await outputPreferences.click()
     await outputPreferences.click()
     await expect(page.getByRole('radio', { name: 'Detailed' })).toHaveAttribute('aria-checked', 'true')
+    await expect(page.getByRole('radio', { name: '10 questions' })).toHaveAttribute('aria-checked', 'true')
   })
 
   test('has no serious or critical automated accessibility violations', async ({ page }) => {

@@ -57,6 +57,7 @@ const DEFAULT_SETTINGS: AnalysisSettings = {
   analysisMode: 'sampled',
   maxChunks: 8,
   quizDifficulty: 'adaptive',
+  quizQuestions: 5,
 }
 
 type SectionKey = 'summary' | 'keyPoints' | 'keywords' | 'sentiment' | 'quiz'

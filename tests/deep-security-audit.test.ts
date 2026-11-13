@@ -18,6 +18,7 @@ const settings: AnalysisSettings = {
   analysisMode: 'sampled',
   maxChunks: 8,
   quizDifficulty: 'adaptive',
+  quizQuestions: 5,
 }
 
 afterEach(() => vi.unstubAllGlobals())

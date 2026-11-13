@@ -41,6 +41,7 @@ export const GROQ_MODELS = [
 export const SUPPORTED_LANGUAGES = ['English', 'Spanish', 'French', 'German', 'Italian', 'Portuguese', 'Dutch', 'Hindi', 'Chinese (Simplified)', 'Japanese', 'Korean', 'Arabic'] as const
 
 export type QuizDifficulty = 'adaptive' | 'easy' | 'medium' | 'hard'
+export type QuizQuestionCount = 5 | 10 | 15
 
 export interface AnalysisSettings {
   model: string
@@ -52,6 +53,7 @@ export interface AnalysisSettings {
   analysisMode: CoverageMode
   maxChunks: number
   quizDifficulty: QuizDifficulty
+  quizQuestions: QuizQuestionCount
 }
 
 export interface QuizQuestion {
@@ -147,7 +149,7 @@ const AnalysisEnvelopeSchema = z.object({
   keyPoints: z.array(CitedTextCandidateSchema).max(10).optional(),
   keywords: z.array(z.string().min(1).max(160)).max(20).optional(),
   sentiment: SentimentSchema.optional(),
-  quiz: z.array(QuizQuestionSchema).max(10).optional(),
+  quiz: z.array(QuizQuestionSchema).max(15).optional(),
 })
 const ChunkDigestSchema = z.object({
   chunkId: z.string().min(1).max(120),
@@ -216,6 +218,7 @@ export function normalizeSettings(settings: AnalysisSettings): AnalysisSettings 
   const allowedLevels = new Set<AnalysisSettings['readingLevel']>(['plain', 'professional', 'academic'])
   const allowedModes = new Set<CoverageMode>(['complete', 'sampled'])
   const allowedDifficulties = new Set<QuizDifficulty>(['adaptive', 'easy', 'medium', 'hard'])
+  const allowedQuizQuestions = new Set<QuizQuestionCount>([5, 10, 15])
   const mode = allowedModes.has(settings.analysisMode) ? settings.analysisMode : 'sampled'
   const defaultChunks = mode === 'complete' ? DEFAULT_COMPLETE_CHUNKS : DEFAULT_SAMPLED_CHUNKS
 
@@ -229,6 +232,7 @@ export function normalizeSettings(settings: AnalysisSettings): AnalysisSettings 
     analysisMode: mode,
     maxChunks: Math.round(clamp(Number(settings.maxChunks ?? defaultChunks), 2, MAX_COMPLETE_CHUNKS)),
     quizDifficulty: allowedDifficulties.has(settings.quizDifficulty) ? settings.quizDifficulty : 'adaptive',
+    quizQuestions: allowedQuizQuestions.has(settings.quizQuestions) ? settings.quizQuestions : 5,
   }
 }
 
@@ -352,7 +356,7 @@ function finalSystemPrompt(settings: AnalysisSettings, sections: AnalysisSection
     citationInstructions,
     'Summary shape: {"text": string, "citations": Citation[]}. keyPoints is an array of the same shape.',
     'keywords contains 8–12 short lowercase topics. sentiment contains label, score (-100..100), confidence (0..100), summary, and 2–4 tones.',
-    `quiz contains up to 10 questions with exactly four options, zero-based answer, explanation, difficulty, and source citations. ${difficulty}`,
+    `quiz contains exactly ${settings.quizQuestions} questions with exactly four options, zero-based answer, explanation, difficulty, and source citations. ${difficulty}`,
     'Never invent facts unsupported by the supplied sources. Distinguish documents when evidence comes from more than one file.',
   ].join('\n')
 }
@@ -418,7 +422,7 @@ function normalizeCitedText(candidate: z.infer<typeof CitedTextCandidateSchema>,
   }
 }
 
-function normalizeAnalysis(parsed: unknown, requested: AnalysisSection[], documents: DocumentModel[], coverage: AnalysisCoverage): Partial<AnalysisResult> {
+function normalizeAnalysis(parsed: unknown, requested: AnalysisSection[], documents: DocumentModel[], coverage: AnalysisCoverage, settings: AnalysisSettings): Partial<AnalysisResult> {
   const value: AnalysisEnvelope = AnalysisEnvelopeSchema.parse(parsed)
   const result: Partial<AnalysisResult> = { coverage }
   if (requested.includes('summary')) {
@@ -458,8 +462,8 @@ function normalizeAnalysis(parsed: unknown, requested: AnalysisSection[], docume
         difficulty: question.difficulty,
         citations,
       }]
-    }).slice(0, 10)
-    if (quiz.length === 0) throw new ValidationFailure('No quiz question has verifiable source evidence.')
+    }).slice(0, settings.quizQuestions)
+    if (quiz.length !== settings.quizQuestions) throw new ValidationFailure(`Quiz contains ${quiz.length} verified questions; expected exactly ${settings.quizQuestions}.`)
     result.quiz = quiz
   }
   return result
@@ -571,7 +575,7 @@ export async function callAI(
         maxTokens: settings.maxTokens,
         temperature: settings.temperature,
         signal,
-        validate: parsed => normalizeAnalysis(parsed, sections, documents, directCoverage),
+        validate: parsed => normalizeAnalysis(parsed, sections, documents, directCoverage, settings),
         onRetry: () => onProgress?.({ phase: 'retrying', completed: 0, total: 1, label: 'Checking evidence and retrying once…', ...progressContext }),
         onProviderEvent,
       })
@@ -639,7 +643,7 @@ export async function callAI(
       maxTokens: settings.maxTokens,
       temperature: settings.temperature,
       signal,
-      validate: parsed => normalizeAnalysis(parsed, sections, documents, coverage),
+      validate: parsed => normalizeAnalysis(parsed, sections, documents, coverage, settings),
       onRetry: () => onProgress?.({ phase: 'retrying', completed: 0, total: 1, label: 'Checking evidence and retrying once…', ...progressContext }),
       onProviderEvent,
     })

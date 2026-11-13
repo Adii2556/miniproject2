@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   ChevronDown, Flame, Rows3, AlignLeft,
   Languages, GraduationCap, RotateCcw, History, Trash2, FileText, X, Zap,
-  ScanSearch, BrainCircuit,
+  ScanSearch, BrainCircuit, FileQuestion,
 } from 'lucide-react'
 import { SUPPORTED_LANGUAGES, type AnalysisSettings } from '../lib/groq'
 import DocLenseLogo from './DocLenseLogo'
@@ -285,6 +285,26 @@ export default function Sidebar(props: SidebarProps) {
                 <option value="hard" className="bg-panel-dark">Hard</option>
               </select>
               <ChevronDown size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-text-dark-soft" />
+            </div>
+          </section>
+
+          <section className="space-y-2">
+            <SectionLabel><FileQuestion size={11} className="-ml-4 mr-0.5 inline" />Quiz questions</SectionLabel>
+            <div className="grid grid-cols-3 gap-1.5 rounded-2xl border border-white/10 bg-black/25 p-1.5" role="radiogroup" aria-label="Quiz questions">
+              {([5, 10, 15] as const).map(count => (
+                <button
+                  key={count}
+                  type="button"
+                  role="radio"
+                  aria-label={`${count} questions`}
+                  aria-checked={settings.quizQuestions === count}
+                  disabled={disabled}
+                  onClick={() => updateSettings({ quizQuestions: count })}
+                  className={`rounded-xl px-2 py-2 text-[11.5px] font-bold transition ${settings.quizQuestions === count ? 'bg-persimmon-dark text-[#2b1206] shadow' : 'text-text-dark-soft hover:bg-white/5 hover:text-text-dark'}`}
+                >
+                  {count}
+                </button>
+              ))}
             </div>
           </section>
 
