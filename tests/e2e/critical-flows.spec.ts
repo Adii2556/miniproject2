@@ -87,6 +87,39 @@ test.describe('evidence-first workspace', () => {
     await expect(page.locator('body')).not.toHaveCSS('overflow-x', 'scroll')
   })
 
+  test('collapses sidebar categories without losing active settings', async ({ page }) => {
+    await page.goto('/#/app')
+    const openSettings = page.getByRole('button', { name: 'Open settings' })
+    if ((page.viewportSize()?.width ?? 1280) < 1024) {
+      await expect(openSettings).toBeVisible()
+      await openSettings.click()
+    }
+
+    const aiSetup = page.getByRole('button', { name: /AI setup/ })
+    const analysisScope = page.getByRole('button', { name: /Analysis scope/ })
+    const generationControls = page.getByRole('button', { name: /Generation controls/ })
+    const outputPreferences = page.getByRole('button', { name: /Output preferences/ })
+    const recentAnalyses = page.getByRole('button', { name: /Recent analyses/ })
+
+    await expect(aiSetup).toHaveAttribute('aria-expanded', 'true')
+    await expect(analysisScope).toHaveAttribute('aria-expanded', 'true')
+    await expect(generationControls).toHaveAttribute('aria-expanded', 'false')
+    await expect(outputPreferences).toHaveAttribute('aria-expanded', 'false')
+    await expect(recentAnalyses).toHaveAttribute('aria-expanded', 'false')
+
+    await analysisScope.click()
+    await expect(analysisScope).toHaveAttribute('aria-expanded', 'false')
+    await generationControls.click()
+    await expect(page.getByLabel('Temperature')).toBeVisible()
+
+    await outputPreferences.click()
+    await page.getByRole('radio', { name: 'Detailed' }).click()
+    await expect(page.getByRole('radio', { name: 'Detailed' })).toHaveAttribute('aria-checked', 'true')
+    await outputPreferences.click()
+    await outputPreferences.click()
+    await expect(page.getByRole('radio', { name: 'Detailed' })).toHaveAttribute('aria-checked', 'true')
+  })
+
   test('has no serious or critical automated accessibility violations', async ({ page }) => {
     await page.goto('/#/app')
     const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ChevronDown, Flame, Rows3, AlignLeft,
   Languages, GraduationCap, RotateCcw, History, Trash2, FileText, X, Zap,
@@ -47,6 +47,45 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   )
 }
 
+type SidebarCategory = 'provider' | 'scope' | 'generation' | 'output' | 'history'
+
+function CollapsibleSection({
+  id, label, summary, icon, expanded, onToggle, children,
+}: {
+  id: SidebarCategory
+  label: string
+  summary: string
+  icon: React.ReactNode
+  expanded: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}) {
+  const contentId = `sidebar-${id}-content`
+  return (
+    <section className={`overflow-hidden rounded-2xl border transition-colors ${expanded ? 'border-white/15 bg-white/[0.035]' : 'border-white/10 bg-black/10'}`}>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-controls={contentId}
+        onClick={onToggle}
+        className="flex w-full items-center gap-3 px-3.5 py-3 text-left transition hover:bg-white/[0.04]"
+      >
+        <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg transition-colors ${expanded ? 'bg-gold-dark/15 text-gold-dark' : 'bg-white/5 text-text-dark-soft'}`}>{icon}</span>
+        <span className="min-w-0 flex-1">
+          <span className={`block text-[10.5px] font-extrabold uppercase tracking-[0.16em] ${expanded ? 'text-text-dark' : 'text-text-dark-soft'}`}>{label}</span>
+          <span className="mt-0.5 block truncate text-[9.5px] font-medium text-text-dark-soft/70">{summary}</span>
+        </span>
+        <ChevronDown size={14} className={`shrink-0 text-text-dark-soft transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />
+      </button>
+      <div id={contentId} aria-hidden={!expanded} inert={!expanded} className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+        <div className="min-h-0 overflow-hidden">
+          <div className="border-t border-white/8 px-3.5 pb-3.5 pt-3">{children}</div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 export default function Sidebar(props: SidebarProps) {
   const {
     open, onClose, providerMode, setProviderMode, activeProvider, setActiveProvider,
@@ -59,6 +98,15 @@ export default function Sidebar(props: SidebarProps) {
   const tokensPct = ((settings.maxTokens - 256) / (4096 - 256)) * 100
   const tempHint = settings.temperature <= 0.35 ? 'Precise & literal' : settings.temperature <= 0.75 ? 'Balanced creativity' : 'Loose & imaginative'
   const panelRef = useRef<HTMLDivElement>(null)
+  const [expanded, setExpanded] = useState<Record<SidebarCategory, boolean>>({
+    provider: true,
+    scope: true,
+    generation: false,
+    output: false,
+    history: false,
+  })
+  const toggleCategory = (category: SidebarCategory) => setExpanded(current => ({ ...current, [category]: !current[category] }))
+  const activeProviderError = providerErrors[activeProvider]
 
   useEffect(() => {
     if (open) {
@@ -96,30 +144,33 @@ export default function Sidebar(props: SidebarProps) {
         </div>
 
         {/* scrollable body */}
-        <div className="flex-1 space-y-6 overflow-y-auto px-5 py-5">
+        <div className="flex-1 space-y-3 overflow-y-auto px-5 py-5">
 
-          <ProviderSettings
-            mode={providerMode}
-            onModeChange={setProviderMode}
-            activeProvider={activeProvider}
-            onActiveProviderChange={setActiveProvider}
-            priority={providerPriority}
-            onPriorityChange={setProviderPriority}
-            keys={providerKeys}
-            onKeyChange={setProviderKey}
-            models={providerModels}
-            onModelChange={setProviderModel}
-            catalogs={modelCatalogs}
-            statuses={providerStatuses}
-            errors={providerErrors}
-            consents={providerConsents}
-            onConsentChange={setProviderConsent}
-            onConnect={onConnectProvider}
-            onTest={onTestProvider}
-            disabled={disabled}
-          />
+          <CollapsibleSection id="provider" label="AI setup" summary={`${providerMode === 'automatic' ? 'Automatic' : 'Manual'} · ${providerModels[activeProvider] || 'No model selected'}`} icon={<BrainCircuit size={14} />} expanded={expanded.provider || Boolean(activeProviderError)} onToggle={() => toggleCategory('provider')}>
+            <ProviderSettings
+              mode={providerMode}
+              onModeChange={setProviderMode}
+              activeProvider={activeProvider}
+              onActiveProviderChange={setActiveProvider}
+              priority={providerPriority}
+              onPriorityChange={setProviderPriority}
+              keys={providerKeys}
+              onKeyChange={setProviderKey}
+              models={providerModels}
+              onModelChange={setProviderModel}
+              catalogs={modelCatalogs}
+              statuses={providerStatuses}
+              errors={providerErrors}
+              consents={providerConsents}
+              onConsentChange={setProviderConsent}
+              onConnect={onConnectProvider}
+              onTest={onTestProvider}
+              disabled={disabled}
+            />
+          </CollapsibleSection>
 
           {/* ---------- COVERAGE & BUDGET ---------- */}
+          <CollapsibleSection id="scope" label="Analysis scope" summary={`${settings.analysisMode === 'complete' ? 'Complete' : 'Sampled'} · ${settings.maxChunks} chunks`} icon={<ScanSearch size={14} />} expanded={expanded.scope} onToggle={() => toggleCategory('scope')}>
           <section className="space-y-2.5">
             <SectionLabel><ScanSearch size={11} className="-ml-4 mr-0.5 inline" />Document coverage</SectionLabel>
             <div className="grid grid-cols-2 gap-1.5 rounded-2xl border border-white/10 bg-black/25 p-1.5" role="radiogroup" aria-label="Analysis coverage mode">
@@ -155,8 +206,11 @@ export default function Sidebar(props: SidebarProps) {
               style={{ ['--fill' as string]: `${((settings.maxChunks - 2) / 38) * 100}%` }}
             />
           </section>
+          </CollapsibleSection>
 
           {/* ---------- TEMPERATURE ---------- */}
+          <CollapsibleSection id="generation" label="Generation controls" summary={`${settings.temperature.toFixed(2)} temperature · ${settings.maxTokens.toLocaleString()} tokens`} icon={<Flame size={14} />} expanded={expanded.generation} onToggle={() => toggleCategory('generation')}>
+          <div className="space-y-5">
           <section className="space-y-2">
             <div className="flex items-center justify-between px-1">
               <SectionLabel><Flame size={11} className="-ml-4 mr-0.5 inline" />Temperature</SectionLabel>
@@ -191,8 +245,12 @@ export default function Sidebar(props: SidebarProps) {
             />
             <div className="flex items-center justify-between px-1 text-[10px] font-semibold text-text-dark-soft/75"><span>256</span><span>2,048</span><span>4,096</span></div>
           </section>
+          </div>
+          </CollapsibleSection>
 
           {/* ---------- SUMMARY STYLE ---------- */}
+          <CollapsibleSection id="output" label="Output preferences" summary={`${settings.summaryStyle[0].toUpperCase()}${settings.summaryStyle.slice(1)} · ${settings.language}`} icon={<AlignLeft size={14} />} expanded={expanded.output} onToggle={() => toggleCategory('output')}>
+          <div className="space-y-5">
           <section className="space-y-2">
             <SectionLabel><AlignLeft size={11} className="-ml-4 mr-0.5 inline" />Summary style</SectionLabel>
             <div className="grid grid-cols-3 gap-1.5 rounded-2xl border border-white/10 bg-black/25 p-1.5" role="radiogroup" aria-label="Summary style">
@@ -269,9 +327,12 @@ export default function Sidebar(props: SidebarProps) {
           <button onClick={onResetSettings} disabled={disabled} className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/12 py-2 text-[11px] font-bold uppercase tracking-wider text-text-dark-soft transition hover:border-white/25 hover:text-text-dark disabled:opacity-50">
             <RotateCcw size={12} /> Reset to defaults
           </button>
+          </div>
+          </CollapsibleSection>
 
           {/* ---------- RECENT ANALYSES ---------- */}
-          <section className="space-y-2.5 border-t border-white/10 pt-5">
+          <CollapsibleSection id="history" label="Recent analyses" summary={history.length === 0 ? 'No analyses in this tab' : `${history.length} ${history.length === 1 ? 'analysis' : 'analyses'} in this tab`} icon={<History size={14} />} expanded={expanded.history} onToggle={() => toggleCategory('history')}>
+          <section className="space-y-2.5">
             <div className="flex items-center justify-between px-1">
               <SectionLabel><History size={11} className="-ml-4 mr-0.5 inline" />This tab's analyses</SectionLabel>
               {history.length > 0 && (
@@ -296,6 +357,7 @@ export default function Sidebar(props: SidebarProps) {
               </ul>
             )}
           </section>
+          </CollapsibleSection>
         </div>
 
         {/* footer badge */}
