@@ -9,12 +9,13 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
+    "check:server": "tsc -p tsconfig.server.json",
     "test:e2e": "playwright test",
     "test:headers": "playwright test tests/e2e/security-headers.spec.ts",
     "benchmark:engineering": "node scripts/benchmark-comparison.mjs",
     "check:security": "node scripts/security-check.mjs",
     "audit:prod": "node scripts/audit-prod.mjs",
-    "check": "npm run lint && npm run test && npm run build && npm run check:security"
+    "check": "npm run lint && npm run test && npm run check:server && npm run build && npm run check:security"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.1",

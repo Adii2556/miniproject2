@@ -90,7 +90,7 @@ function classifyError(status: number, value: unknown): string {
 }
 
 function isProviderId(value: unknown): value is ProviderId {
-  return typeof value === 'string' && Object.hasOwn(PROVIDER_TARGETS, value)
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(PROVIDER_TARGETS, value)
 }
 
 function containsControlCharacter(value: string): boolean {
@@ -160,13 +160,18 @@ function validateChatPayload(provider: ProviderId, value: unknown): ChatPayload 
   if (value.reasoning_format !== undefined && (provider !== 'groq' || value.reasoning_format !== 'hidden')) return null
   if (value.reasoning_effort !== undefined && ((provider !== 'groq' && provider !== 'nvidia' && provider !== 'openai') || value.reasoning_effort !== 'low')) return null
 
+  const validatedTemperature = temperature as number | undefined
+  const validatedMaxTokens = maxTokens as number | undefined
+  const validatedMaxCompletionTokens = maxCompletionTokens as number | undefined
+  const validatedTopP = topP as number | undefined
+
   return {
     model,
     messages,
-    ...(temperature === undefined ? {} : { temperature }),
-    ...(maxTokens === undefined ? {} : { max_tokens: maxTokens }),
-    ...(maxCompletionTokens === undefined ? {} : { max_completion_tokens: maxCompletionTokens }),
-    ...(topP === undefined ? {} : { top_p: topP }),
+    ...(validatedTemperature === undefined ? {} : { temperature: validatedTemperature }),
+    ...(validatedMaxTokens === undefined ? {} : { max_tokens: validatedMaxTokens }),
+    ...(validatedMaxCompletionTokens === undefined ? {} : { max_completion_tokens: validatedMaxCompletionTokens }),
+    ...(validatedTopP === undefined ? {} : { top_p: validatedTopP }),
     ...(value.response_format === undefined ? {} : { response_format: { type: 'json_object' as const } }),
     ...(value.reasoning_format === undefined ? {} : { reasoning_format: 'hidden' as const }),
     ...(value.reasoning_effort === undefined ? {} : { reasoning_effort: 'low' as const }),
