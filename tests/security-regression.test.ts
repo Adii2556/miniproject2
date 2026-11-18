@@ -12,6 +12,7 @@ describe('security regression boundaries', () => {
     expect(headers).not.toMatch(/connect-src[^;]*api\.(?:groq|openai|deepseek)/)
     expect(headers).toContain("frame-ancestors 'none'")
     expect(html).toContain("connect-src 'self';")
+    expect(html).not.toContain("frame-ancestors 'none'")
     expect(html).not.toMatch(/connect-src[^;]*(?:api\.groq|integrate\.api\.nvidia|api\.deepseek|api\.openai)/)
   })
 
