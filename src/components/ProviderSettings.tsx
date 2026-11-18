@@ -2,12 +2,13 @@ import { useMemo, useState } from 'react'
 import {
   ArrowDown, ArrowUp, CheckCircle2, ChevronDown, CircleHelp, Eye, EyeOff,
   ExternalLink, KeyRound, Loader2, RefreshCw, Save, Search, ShieldAlert, ShieldCheck,
-  TestTube2, Trash2,
+  Trash2,
 } from 'lucide-react'
 import {
   PROVIDERS,
   providerDefinition,
   type ModelMetadata,
+  type ModelVerificationProgress,
   type ProviderId,
   type ProviderMode,
   type ProviderStatus,
@@ -31,39 +32,49 @@ interface ProviderSettingsProps {
   catalogs: Partial<Record<ProviderId, ModelMetadata[]>>
   statuses: Record<ProviderId, ProviderStatus>
   errors: Partial<Record<ProviderId, string>>
+  notices: Partial<Record<ProviderId, string>>
+  progress: Partial<Record<ProviderId, ModelVerificationProgress>>
   consents: Record<ProviderId, boolean>
   onConsentChange: (provider: ProviderId, consent: boolean) => void
   onConnect: (provider: ProviderId, refresh?: boolean) => void
-  onTest: (provider: ProviderId) => void
   disabled?: boolean
 }
 function compatibilityLabel(model: ModelMetadata | undefined) {
-  if (!model) return { label: 'Manual model ID · unverified', className: 'text-gold-dark' }
-  if (model.compatibility === 'verified') return { label: 'Text/chat suitable', className: 'text-emerald-400' }
-  if (model.compatibility === 'incompatible') return { label: 'Not suitable for document analysis', className: 'text-[#ffb3a0]' }
-  return { label: 'Capability unverified', className: 'text-gold-dark' }
+  if (!model) return { label: 'No verified model selected', className: 'text-gold-dark' }
+  return { label: 'Live verified for DocLense', className: 'text-emerald-400' }
+}
+function compactTokens(value: number) {
+  return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M` : value >= 1_000 ? `${Math.round(value / 1_000)}K` : String(value)
 }
 export default function ProviderSettings(props: ProviderSettingsProps) {
   const {
     mode, onModeChange, activeProvider, onActiveProviderChange, priority, onPriorityChange,
-    keys, keyPersistence, onKeyChange, onSaveKey, onRemoveKey, models, onModelChange, catalogs, statuses, errors, consents,
-    onConsentChange, onConnect, onTest, disabled,
+    keys, keyPersistence, onKeyChange, onSaveKey, onRemoveKey, models, onModelChange, catalogs, statuses, errors, notices, progress, consents,
+    onConsentChange, onConnect, disabled,
   } = props
   const [reveal, setReveal] = useState<Record<ProviderId, boolean>>({ groq: false, nvidia: false, deepseek: false, openai: false })
+  const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const [modelSearch, setModelSearch] = useState('')
   const provider = providerDefinition(activeProvider)
   const catalog = useMemo(() => catalogs[activeProvider] ?? [], [activeProvider, catalogs])
-  const selectable = catalog.filter(model => model.compatibility !== 'incompatible')
+  const selectable = useMemo(() => catalog.filter(model => model.compatibility === 'verified'), [catalog])
   const selected = catalog.find(model => model.id === models[activeProvider])
   const indicator = compatibilityLabel(selected)
   const listId = `models-${activeProvider}`
-  const connectionLabel = statuses[activeProvider] === 'ready' ? 'Connected' : statuses[activeProvider] === 'validating' ? 'Checking' : statuses[activeProvider] === 'error' ? 'Needs attention' : 'Not checked'
+  const currentProgress = progress[activeProvider]
+  const connectionLabel = statuses[activeProvider] === 'ready'
+    ? 'Connected'
+    : statuses[activeProvider] === 'validating'
+      ? currentProgress?.phase === 'verifying' ? `Verifying ${currentProgress.checked}/${currentProgress.total}` : 'Discovering'
+      : statuses[activeProvider] === 'error' ? 'Needs attention' : 'Not checked'
   const persistence = keyPersistence[activeProvider]
-  const modelSummary = useMemo(() => {
-    if (catalog.length === 0) return 'No cached catalog. Validate the key or enter a model ID manually.'
-    const verified = catalog.filter(model => model.compatibility === 'verified').length
-    const unverified = catalog.filter(model => model.compatibility === 'unverified').length
-    return `${verified} suitable · ${unverified} unverified · ${catalog.length - verified - unverified} filtered`
-  }, [catalog])
+  const filteredModels = useMemo(() => {
+    const query = modelSearch.trim().toLocaleLowerCase()
+    if (!query) return selectable
+    return selectable.filter(model => [model.label, model.id, model.ownedBy].some(value => value?.toLocaleLowerCase().includes(query)))
+  }, [modelSearch, selectable])
+  const modelSummary = notices[activeProvider]
+    ?? (statuses[activeProvider] === 'validating' ? 'Only models that pass live verification will appear.' : 'Add a key and allow API usage to discover verified models.')
 
   const moveProvider = (id: ProviderId, direction: -1 | 1) => {
     const index = priority.indexOf(id)
@@ -89,7 +100,7 @@ export default function ProviderSettings(props: ProviderSettingsProps) {
       <p className="px-1 text-[10.5px] font-medium leading-relaxed text-text-dark-soft/80">{mode === 'automatic' ? 'Retries temporary failures, then follows the consented provider order below.' : 'Uses only the provider and model you select.'}</p>
 
       <div className="relative">
-        <select value={activeProvider} disabled={disabled} onChange={event => onActiveProviderChange(event.target.value as ProviderId)} aria-label="AI provider" className="w-full appearance-none rounded-xl border border-white/12 bg-black/30 px-3 py-2.5 pr-9 text-[12.5px] font-bold text-text-dark outline-none focus:border-persimmon-dark/60">
+        <select value={activeProvider} disabled={disabled} onChange={event => { setModelMenuOpen(false); setModelSearch(''); onActiveProviderChange(event.target.value as ProviderId) }} aria-label="AI provider" className="w-full appearance-none rounded-xl border border-white/12 bg-black/30 px-3 py-2.5 pr-9 text-[12.5px] font-bold text-text-dark outline-none focus:border-persimmon-dark/60">
           {PROVIDERS.map(item => <option key={item.id} value={item.id} className="bg-panel-dark">{item.label}</option>)}
         </select>
         <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-text-dark-soft" />
@@ -126,21 +137,69 @@ export default function ProviderSettings(props: ProviderSettingsProps) {
 
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <label htmlFor={`${activeProvider}-model`} className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-text-dark-soft">Model</label>
+          <label htmlFor={`${activeProvider}-model`} className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-text-dark-soft">Verified model</label>
           <button type="button" disabled={disabled || statuses[activeProvider] === 'validating' || !keys[activeProvider].trim() || !consents[activeProvider]} onClick={() => onConnect(activeProvider, true)} className="inline-flex items-center gap-1 text-[10px] font-bold text-gold-dark disabled:opacity-40"><RefreshCw size={11} />Refresh models</button>
         </div>
-        <div className="relative">
-          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-persimmon-dark" />
-          <input id={`${activeProvider}-model`} list={listId} value={models[activeProvider]} disabled={disabled} onChange={event => onModelChange(activeProvider, event.target.value)} placeholder="Search or enter a model ID" className="w-full rounded-xl border border-white/12 bg-black/30 py-2.5 pl-9 pr-3 text-[12px] font-semibold text-text-dark outline-none focus:border-persimmon-dark/60" />
-          <datalist id={listId}>{selectable.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</datalist>
+        <div className="relative" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setModelMenuOpen(false) }}>
+          <button
+            id={`${activeProvider}-model`}
+            type="button"
+            role="combobox"
+            aria-expanded={modelMenuOpen}
+            aria-controls={listId}
+            aria-haspopup="listbox"
+            disabled={disabled || statuses[activeProvider] === 'validating' || selectable.length === 0}
+            onClick={() => setModelMenuOpen(open => !open)}
+            className="flex w-full items-center gap-2 rounded-xl border border-white/12 bg-black/30 px-3 py-2.5 text-left outline-none transition focus:border-persimmon-dark/60 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {statuses[activeProvider] === 'validating' ? <Loader2 size={14} className="shrink-0 animate-spin text-persimmon-dark" /> : <Search size={14} className="shrink-0 text-persimmon-dark" />}
+            <span className={`min-w-0 flex-1 truncate text-[12px] font-semibold ${selected ? 'text-text-dark' : 'text-text-dark-soft/60'}`}>
+              {statuses[activeProvider] === 'validating'
+                ? currentProgress?.phase === 'verifying' ? `Verifying models ${currentProgress.checked} of ${currentProgress.total}…` : 'Discovering available models…'
+                : selected?.label ?? 'No verified models available'}
+            </span>
+            <ChevronDown size={13} className={`shrink-0 text-text-dark-soft transition ${modelMenuOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {modelMenuOpen ? (
+            <div className="absolute inset-x-0 top-[calc(100%+0.4rem)] z-30 overflow-hidden rounded-xl border border-white/15 bg-[#16251f] shadow-2xl">
+              <div className="relative border-b border-white/10 p-2">
+                <Search size={13} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-text-dark-soft" />
+                <input autoFocus value={modelSearch} onChange={event => setModelSearch(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') setModelMenuOpen(false) }} aria-label="Search verified models" placeholder="Search name, ID, or owner" className="w-full rounded-lg border border-white/10 bg-black/25 py-2 pl-8 pr-2 text-[11px] text-text-dark outline-none placeholder:text-text-dark-soft/50 focus:border-gold-dark/50" />
+              </div>
+              <div id={listId} role="listbox" aria-label={`${provider.label} verified models`} className="max-h-64 overflow-y-auto p-1.5">
+                {filteredModels.length > 0 ? filteredModels.map(model => (
+                  <button
+                    key={model.id}
+                    type="button"
+                    role="option"
+                    aria-selected={model.id === models[activeProvider]}
+                    onClick={() => { onModelChange(activeProvider, model.id); setModelMenuOpen(false); setModelSearch('') }}
+                    className={`w-full rounded-lg px-2.5 py-2 text-left transition ${model.id === models[activeProvider] ? 'bg-persimmon-dark/20' : 'hover:bg-white/[0.06]'}`}
+                  >
+                    <span className="flex items-start justify-between gap-2">
+                      <span className="min-w-0">
+                        <span className="block truncate text-[11.5px] font-bold text-text-dark">{model.label}</span>
+                        <span className="mt-0.5 block truncate font-mono text-[9px] text-text-dark-soft/75">{model.id}</span>
+                      </span>
+                      {model.id === models[activeProvider] ? <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-emerald-400" /> : null}
+                    </span>
+                    <span className="mt-1.5 flex flex-wrap gap-x-2 text-[9px] font-semibold text-text-dark-soft/65">
+                      {model.ownedBy ? <span>{model.ownedBy}</span> : null}
+                      {model.contextWindow ? <span>{compactTokens(model.contextWindow)} context</span> : null}
+                      {model.maxOutputTokens ? <span>{compactTokens(model.maxOutputTokens)} output</span> : null}
+                    </span>
+                  </button>
+                )) : <p className="px-3 py-5 text-center text-[10.5px] font-medium text-text-dark-soft">No verified model matches “{modelSearch}”.</p>}
+              </div>
+            </div>
+          ) : null}
         </div>
-        <div className="flex items-start justify-between gap-2 px-1">
+        <div className="px-1">
           <div>
             <p className={`text-[10.5px] font-bold ${indicator.className}`}>{indicator.label}</p>
             <p className="mt-0.5 text-[9.5px] leading-relaxed text-text-dark-soft/75">{selected?.contextWindow ? `${selected.contextWindow.toLocaleString()} context` : 'Context limit not reported'}{selected?.maxOutputTokens ? ` · ${selected.maxOutputTokens.toLocaleString()} max output` : ''}</p>
             {selected?.reason ? <p className="mt-1 max-w-[220px] text-[9.5px] leading-relaxed text-text-dark-soft/80">{selected.reason}</p> : null}
           </div>
-          <button type="button" disabled={disabled || !keys[activeProvider].trim() || !models[activeProvider].trim() || !consents[activeProvider]} onClick={() => onTest(activeProvider)} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-white/12 px-2 py-1 text-[9.5px] font-bold text-text-dark-soft hover:text-text-dark disabled:opacity-40"><TestTube2 size={11} />Test</button>
         </div>
         <p className="px-1 text-[9.5px] leading-relaxed text-text-dark-soft/70">{modelSummary}</p>
       </div>
@@ -150,7 +209,7 @@ export default function ProviderSettings(props: ProviderSettingsProps) {
           <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-[0.16em] text-text-dark-soft"><ShieldCheck size={12} />Fallback priority</div>
           <ol className="space-y-1.5">
             {priority.map((id, index) => {
-              const ready = Boolean(keys[id].trim() && models[id].trim() && consents[id])
+              const ready = Boolean(keys[id].trim() && models[id].trim() && consents[id] && catalogs[id]?.some(model => model.id === models[id] && model.compatibility === 'verified'))
               return <li key={id} className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-2.5 py-2">
                 <span className="w-4 font-mono text-[10px] text-text-dark-soft">{index + 1}</span>
                 <span className="min-w-0 flex-1 truncate text-[11px] font-bold text-text-dark">{providerDefinition(id).shortLabel}</span>
@@ -160,7 +219,7 @@ export default function ProviderSettings(props: ProviderSettingsProps) {
               </li>
             })}
           </ol>
-          <p className="flex items-start gap-1.5 text-[9.5px] leading-relaxed text-text-dark-soft/70"><CircleHelp size={11} className="mt-0.5 shrink-0" />Only providers with a key, model, and explicit usage consent participate.</p>
+          <p className="flex items-start gap-1.5 text-[9.5px] leading-relaxed text-text-dark-soft/70"><CircleHelp size={11} className="mt-0.5 shrink-0" />Only providers with a key, live-verified model, and explicit usage consent participate.</p>
         </div>
       ) : null}
     </section>

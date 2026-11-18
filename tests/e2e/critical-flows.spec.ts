@@ -3,6 +3,18 @@ import AxeBuilder from '@axe-core/playwright'
 
 const PROVIDER_URL = '**/api/ai'
 const SAVED_KEYS_STORAGE = 'doclense.saved-provider-keys.v1'
+const COMPATIBLE_PROBE = {
+  compatible: true,
+  title: 'Schema check',
+  oneLiner: 'All required fields are present.',
+  summary: { text: 'Evidence is present.', citations: [{ sourceId: 's1', excerpt: 'Evidence is present.' }] },
+  keyPoints: [{ text: 'Evidence is present.', citations: [{ sourceId: 's1', excerpt: 'Evidence is present.' }] }],
+  keywords: ['evidence', 'schema'],
+  sentiment: { label: 'Neutral', score: 0, confidence: 100, summary: 'The tone is neutral.', tones: ['neutral'] },
+  quiz: [{ question: 'What is present?', options: ['Evidence', 'Noise', 'Nothing', 'Unknown'], answer: 0, explanation: 'The source says evidence is present.', difficulty: 'easy', citations: [{ sourceId: 's1', excerpt: 'Evidence is present.' }] }],
+  answer: { text: 'Evidence is present.', citations: [{ sourceId: 's1', excerpt: 'Evidence is present.' }] },
+  digests: [{ chunkId: 'c1', overview: 'Evidence is present.', claims: [{ text: 'Evidence is present.', citations: [{ sourceId: 's1', excerpt: 'Evidence is present.' }] }], keywords: ['evidence'] }],
+}
 
 async function openProviderSettings(page: Page) {
   if ((page.viewportSize()?.width ?? 1280) >= 1024) return
@@ -11,12 +23,13 @@ async function openProviderSettings(page: Page) {
 }
 
 async function fulfillProvider(route: Route, content: unknown) {
-  const request = route.request().postDataJSON() as { action?: string }
+  const request = route.request().postDataJSON() as { action?: string; payload?: { messages?: Array<{ content?: string }> } }
+  const verification = request.payload?.messages?.some(message => message.content?.includes('"compatible":true'))
   await route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(request.action === 'models'
-      ? { data: [{ id: 'llama-3.3-70b-versatile', active: true, context_window: 131072 }] }
-      : { choices: [{ message: { content: JSON.stringify(content) } }] }),
+      ? { data: [{ id: 'openai/gpt-oss-120b', active: true, context_window: 131072, max_completion_tokens: 65_536 }] }
+      : { choices: [{ message: { content: JSON.stringify(verification ? COMPATIBLE_PROBE : content) } }] }),
   })
 }
 
@@ -26,10 +39,44 @@ async function addKey(page: Page) {
   await openProviderSettings(page)
   await input.fill('browser-test-key')
   await page.locator('label').filter({ hasText: 'Allow API usage' }).locator('input[type="checkbox"]').check()
+  await expect(page.getByRole('combobox', { name: 'Verified model' })).toContainText('openai/gpt-oss-120b')
   if (await page.getByRole('button', { name: 'Close settings' }).isVisible()) await page.keyboard.press('Escape')
 }
 
 test.describe('evidence-first workspace', () => {
+  test('shows only live-verified models in the searchable picker', async ({ page }) => {
+    await page.route(PROVIDER_URL, async route => {
+      const request = route.request().postDataJSON() as { action?: string; payload?: { model?: string } }
+      if (request.action === 'models') {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: [
+          { id: 'openai/gpt-oss-120b', active: true, context_window: 131_072, max_completion_tokens: 65_536 },
+          { id: 'openai/gpt-oss-20b', active: true, context_window: 131_072, max_completion_tokens: 65_536 },
+          { id: 'vendor/retired-chat', active: true, context_window: 32_768 },
+          { id: 'whisper-large-v3', active: true, context_window: 448 },
+        ] }) })
+        return
+      }
+      if (request.payload?.model === 'vendor/retired-chat') {
+        await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: { category: 'model', message: 'Model unavailable.' } }) })
+        return
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ choices: [{ message: { content: JSON.stringify(COMPATIBLE_PROBE) } }] }) })
+    })
+    await page.goto('/#/app')
+    await addKey(page)
+    await openProviderSettings(page)
+
+    const picker = page.getByRole('combobox', { name: 'Verified model' })
+    await picker.click()
+    await page.getByRole('textbox', { name: 'Search verified models' }).fill('20b')
+    await expect(page.getByRole('option', { name: /openai\/gpt-oss-20b/ })).toBeVisible()
+    await expect(page.getByRole('option', { name: /vendor\/retired-chat/ })).toHaveCount(0)
+    await expect(page.getByRole('option', { name: /whisper-large-v3/ })).toHaveCount(0)
+    await page.getByRole('option', { name: /openai\/gpt-oss-20b/ }).click()
+    await expect(picker).toContainText('openai/gpt-oss-20b')
+    await expect(page.getByText('2 verified · 2 unavailable or incompatible.')).toBeVisible()
+  })
+
   test('saves, restores, updates, and removes an API key only on explicit request', async ({ page }) => {
     await page.goto('/#/app')
     await openProviderSettings(page)
@@ -87,6 +134,39 @@ test.describe('evidence-first workspace', () => {
     const storage = await page.evaluate(() => JSON.stringify({ local: Object.entries(localStorage), session: Object.entries(sessionStorage) }))
     expect(storage).not.toContain('browser-test-key')
     expect(storage).not.toContain('Quarterly revenue')
+  })
+
+  test('keeps verified output visible and offers a targeted retry when one section fails', async ({ page }) => {
+    await page.route(PROVIDER_URL, async route => {
+      const request = route.request().postDataJSON() as { action?: string; payload?: { messages?: Array<{ content?: string }> } }
+      const verification = request.payload?.messages?.some(message => message.content?.includes('"compatible":true'))
+      if (request.action === 'models') {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: [{ id: 'openai/gpt-oss-120b', active: true, context_window: 131072, max_completion_tokens: 4096 }] }) })
+        return
+      }
+      const system = request.payload?.messages?.[0]?.content ?? ''
+      const content = verification
+        ? COMPATIBLE_PROBE
+        : system.includes('title, oneLiner, summary, sentiment')
+          ? {
+              title: 'Verified partial result',
+              oneLiner: 'The summary passed evidence validation.',
+              summary: { text: 'Quarterly revenue increased by twelve percent.', citations: [{ sourceId: 'partial-txt-1:para-1', excerpt: 'Quarterly revenue increased by twelve percent.' }] },
+              sentiment: { label: 'Neutral' },
+            }
+          : { sentiment: { label: 'Neutral' } }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }) })
+    })
+    await page.goto('/#/app')
+    await addKey(page)
+    await page.locator('input[type="file"]').first().setInputFiles({ name: 'partial.txt', mimeType: 'text/plain', buffer: Buffer.from('Quarterly revenue increased by twelve percent.') })
+    await page.getByRole('button', { name: 'Summary only' }).click()
+    await page.getByRole('checkbox', { name: /Sentiment Tone & polarity/ }).click()
+    await page.getByRole('button', { name: 'Generate analysis' }).click()
+
+    await expect(page.getByRole('heading', { name: 'Verified partial result' })).toBeVisible()
+    await expect(page.getByRole('alert')).toContainText('Verified results were kept')
+    await expect(page.getByRole('button', { name: 'Retry failed sections' })).toBeVisible()
   })
 
   test('asks across multiple documents and distinguishes the cited source', async ({ page }) => {

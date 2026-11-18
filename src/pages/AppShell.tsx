@@ -18,20 +18,18 @@ import { FileSafetyError, validatePdfSignature, validatePlainText } from '../lib
 import { computeStats, extractKeywords, type DocStats } from '../lib/stats'
 import {
   callAI, askAI, clearAnalysisCache, FriendlyError, normalizeSettings,
-  type AnalysisSettings, type AnalysisResult, type AnalysisSection, type AnalysisProgress,
+  type AnalysisSettings, type AnalysisResult, type AnalysisSection, type AnalysisProgress, type AnalysisFailures,
 } from '../lib/groq'
 import {
   DEFAULT_PROVIDER_ORDER,
-  discoverProviderModels,
-  providerErrorCategory,
+  discoverAndVerifyProviderModels,
   providerDefinition,
-  testProviderModel,
-  withModelCompatibility,
   type AIExecutionConfig,
   type ModelMetadata,
   type ProviderId,
   type ProviderMode,
   type ProviderStatus,
+  type ModelVerificationProgress,
 } from '../lib/aiProviders'
 import { SAMPLE_DOCS } from '../lib/samples'
 import { clearHistory, clearLegacySensitiveStorage, loadHistory, saveHistoryEntry, type HistoryEntry } from '../lib/history'
@@ -46,16 +44,15 @@ import {
   type ProviderKeyPersistence,
   type SavedProviderKeys,
 } from '../lib/providerKeyStorage'
+import { clearVerifiedModelCache, loadVerifiedModelCache, saveVerifiedModelCache } from '../lib/verifiedModelCache'
 
 const LS_SETTINGS = 'doclense.settings.v1'
 const LS_PROVIDER_SETTINGS = 'doclense.providers.v1'
-const MODEL_CACHE_PREFIX = 'doclense.model-catalog.v2.'
-const MODEL_CACHE_MS = 15 * 60 * 1000
 const MAX_FILE_MB = 15
 const CHAT_LIMIT = 2000
 
 const DEFAULT_SETTINGS: AnalysisSettings = {
-  model: 'llama-3.3-70b-versatile',
+  model: '',
   temperature: 0.7,
   maxTokens: 3072,
   summaryStyle: 'concise',
@@ -116,7 +113,7 @@ interface StoredProviderSettings {
 const EMPTY_PROVIDER_KEYS: Record<ProviderId, string> = { groq: '', nvidia: '', deepseek: '', openai: '' }
 const EMPTY_PROVIDER_STATUS: Record<ProviderId, ProviderStatus> = { groq: 'idle', nvidia: 'idle', deepseek: 'idle', openai: 'idle' }
 const EMPTY_PROVIDER_CONSENTS: Record<ProviderId, boolean> = { groq: false, nvidia: false, deepseek: false, openai: false }
-const DEFAULT_PROVIDER_MODELS: Record<ProviderId, string> = { groq: DEFAULT_SETTINGS.model, nvidia: '', deepseek: '', openai: '' }
+const DEFAULT_PROVIDER_MODELS: Record<ProviderId, string> = { groq: '', nvidia: '', deepseek: '', openai: '' }
 
 function loadStoredSettings(): AnalysisSettings {
   try {
@@ -144,17 +141,6 @@ function loadProviderSettings(): StoredProviderSettings {
   } catch { return fallback }
 }
 
-function loadCachedCatalog(provider: ProviderId): ModelMetadata[] {
-  try {
-    const cached = JSON.parse(sessionStorage.getItem(`${MODEL_CACHE_PREFIX}${provider}`) ?? '') as { savedAt?: number; models?: ModelMetadata[] }
-    return cached.savedAt && Date.now() - cached.savedAt < MODEL_CACHE_MS && Array.isArray(cached.models) ? cached.models : []
-  } catch { return [] }
-}
-
-function saveCachedCatalog(provider: ProviderId, models: ModelMetadata[]): void {
-  try { sessionStorage.setItem(`${MODEL_CACHE_PREFIX}${provider}`, JSON.stringify({ savedAt: Date.now(), models })) } catch { /* ignore */ }
-}
-
 const UPLOAD_STAGES = ['Validating file…', 'Reading document…', 'Extracting text…', 'Computing statistics…']
 const GEN_STAGES = ['Reading the document…', 'Drafting your summary…', 'Extracting keywords…', 'Gauging sentiment…', 'Writing quiz questions…', 'Polishing the details…']
 const SUGGESTIONS = ['What is the main argument of this document?', 'Who is the intended audience?', 'What are the strongest counterarguments or risks?']
@@ -168,6 +154,7 @@ export default function AppShell() {
   const initialProviders = useMemo(() => loadProviderSettings(), [])
   const [providerMode, setProviderMode] = useState<ProviderMode>(initialProviders.mode)
   const [activeProvider, setActiveProvider] = useState<ProviderId>(initialProviders.activeProvider)
+  const activeProviderRef = useRef<ProviderId>(initialProviders.activeProvider)
   const [providerPriority, setProviderPriority] = useState<ProviderId[]>(initialProviders.priority)
   const initialSavedProviderKeys = useMemo(() => loadSavedProviderKeys(), [])
   const [providerKeys, setProviderKeys] = useState<Record<ProviderId, string>>({ ...EMPTY_PROVIDER_KEYS, ...initialSavedProviderKeys })
@@ -176,7 +163,10 @@ export default function AppShell() {
   const [providerConsents, setProviderConsents] = useState<Record<ProviderId, boolean>>(EMPTY_PROVIDER_CONSENTS)
   const [providerStatuses, setProviderStatuses] = useState<Record<ProviderId, ProviderStatus>>(EMPTY_PROVIDER_STATUS)
   const [providerErrors, setProviderErrors] = useState<Partial<Record<ProviderId, string>>>({})
-  const [modelCatalogs, setModelCatalogs] = useState<Partial<Record<ProviderId, ModelMetadata[]>>>(() => Object.fromEntries(DEFAULT_PROVIDER_ORDER.map(id => [id, loadCachedCatalog(id)])) as Partial<Record<ProviderId, ModelMetadata[]>>)
+  const [providerNotices, setProviderNotices] = useState<Partial<Record<ProviderId, string>>>({})
+  const [providerProgress, setProviderProgress] = useState<Partial<Record<ProviderId, ModelVerificationProgress>>>({})
+  const [modelCatalogs, setModelCatalogs] = useState<Partial<Record<ProviderId, ModelMetadata[]>>>({})
+  const providerDiscoveryIds = useRef<Record<ProviderId, number>>({ groq: 0, nvidia: 0, deepseek: 0, openai: 0 })
 
   useEffect(() => {
     clearLegacySensitiveStorage()
@@ -198,16 +188,16 @@ export default function AppShell() {
     activeProvider,
     priority: providerPriority,
     providers: Object.fromEntries(DEFAULT_PROVIDER_ORDER.map(provider => [provider, {
+      ...modelCatalogs[provider]?.find(model => model.id === providerModels[provider]),
       provider,
       apiKey: providerKeys[provider],
       model: providerModels[provider],
       consent: providerConsents[provider],
-      compatibility: modelCatalogs[provider]?.find(model => model.id === providerModels[provider])?.compatibility ?? 'unverified',
     }])),
   }), [activeProvider, modelCatalogs, providerConsents, providerKeys, providerMode, providerModels, providerPriority])
   const providerIsReady = useCallback((provider: ProviderId) => {
     const compatibility = modelCatalogs[provider]?.find(model => model.id === providerModels[provider])?.compatibility
-    return Boolean(providerKeys[provider].trim() && providerModels[provider].trim() && providerConsents[provider] && compatibility !== 'incompatible')
+    return Boolean(providerKeys[provider].trim() && providerModels[provider].trim() && providerConsents[provider] && compatibility === 'verified')
   }, [modelCatalogs, providerConsents, providerKeys, providerModels])
   const activeReady = providerMode === 'manual' ? providerIsReady(activeProvider) : providerPriority.some(providerIsReady)
   const providerKeyPersistence = useMemo(() => Object.fromEntries(DEFAULT_PROVIDER_ORDER.map(provider => {
@@ -239,6 +229,7 @@ export default function AppShell() {
   const [generated, setGenerated] = useState<GeneratedMap>({ summary: false, keyPoints: false, keywords: false, sentiment: false, quiz: false })
   const [showResults, setShowResults] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
+  const [failedSections, setFailedSections] = useState<AnalysisSection[]>([])
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null)
 
   // ---------- chat about the doc ----------
@@ -285,10 +276,16 @@ export default function AppShell() {
   const deleteProviderKey = useCallback((provider: ProviderId) => {
     try {
       const next = removeSavedProviderKey(provider)
+      providerDiscoveryIds.current[provider] += 1
+      clearVerifiedModelCache(provider)
       setSavedProviderKeys(next)
       setProviderKeys(current => ({ ...current, [provider]: '' }))
+      setProviderModels(current => ({ ...current, [provider]: '' }))
+      setModelCatalogs(current => ({ ...current, [provider]: [] }))
       setProviderStatuses(current => ({ ...current, [provider]: 'idle' }))
       setProviderErrors(current => ({ ...current, [provider]: undefined }))
+      setProviderNotices(current => ({ ...current, [provider]: undefined }))
+      setProviderProgress(current => ({ ...current, [provider]: undefined }))
       pushToast(`${providerDefinition(provider).label} API key removed from this browser`)
     } catch {
       const message = 'Could not remove this API key from the browser.'
@@ -297,82 +294,107 @@ export default function AppShell() {
     }
   }, [pushToast])
 
-  const connectProvider = useCallback(async (provider: ProviderId, refresh = false) => {
+  const connectProvider = useCallback(async (provider: ProviderId, refresh = false, consentOverride?: boolean) => {
     const key = providerKeys[provider].trim()
     if (!key) {
       setProviderErrors(current => ({ ...current, [provider]: 'Enter an API key first.' }))
       return
     }
-    if (!providerConsents[provider]) {
+    if (!(consentOverride ?? providerConsents[provider])) {
       setProviderErrors(current => ({ ...current, [provider]: 'Allow API usage before contacting this provider.' }))
       return
     }
+    const discoveryId = providerDiscoveryIds.current[provider] + 1
+    providerDiscoveryIds.current[provider] = discoveryId
+    setProviderErrors(current => ({ ...current, [provider]: undefined }))
+    setProviderNotices(current => ({ ...current, [provider]: undefined }))
     if (!refresh) {
-      const cached = loadCachedCatalog(provider)
+      const cached = await loadVerifiedModelCache(provider, key)
+      if (providerDiscoveryIds.current[provider] !== discoveryId) return
       if (cached.length > 0) {
         setModelCatalogs(current => ({ ...current, [provider]: cached }))
         setProviderStatuses(current => ({ ...current, [provider]: 'ready' }))
-        if (!providerModels[provider]) setProviderModels(current => ({ ...current, [provider]: cached.find(model => model.compatibility === 'verified')?.id ?? cached[0]?.id ?? '' }))
+        setProviderProgress(current => ({ ...current, [provider]: undefined }))
+        setProviderNotices(current => ({ ...current, [provider]: `${cached.length} verified model${cached.length === 1 ? '' : 's'} loaded from the key-specific cache.` }))
+        const selected = cached.some(model => model.id === providerModels[provider]) ? providerModels[provider] : cached[0].id
+        setProviderModels(current => ({ ...current, [provider]: selected }))
+        if (provider === activeProviderRef.current) setSettings(current => normalizeSettings({ ...current, model: selected }))
         return
       }
     }
     setProviderStatuses(current => ({ ...current, [provider]: 'validating' }))
-    setProviderErrors(current => ({ ...current, [provider]: undefined }))
     try {
-      const models = await discoverProviderModels(provider, key)
+      const result = await discoverAndVerifyProviderModels(provider, key, {
+        onProgress: progress => {
+          if (providerDiscoveryIds.current[provider] === discoveryId) setProviderProgress(current => ({ ...current, [provider]: progress }))
+        },
+      })
+      if (providerDiscoveryIds.current[provider] !== discoveryId) return
+      const models = result.models
       setModelCatalogs(current => ({ ...current, [provider]: models }))
-      saveCachedCatalog(provider, models)
-      setProviderStatuses(current => ({ ...current, [provider]: 'ready' }))
-      if (!providerModels[provider]) {
-        const recommended = models.find(model => model.compatibility === 'verified') ?? models.find(model => model.compatibility === 'unverified')
-        if (recommended) setProviderModels(current => ({ ...current, [provider]: recommended.id }))
+      setProviderProgress(current => ({ ...current, [provider]: undefined }))
+      if (models.length === 0) {
+        setProviderModels(current => ({ ...current, [provider]: '' }))
+        setProviderStatuses(current => ({ ...current, [provider]: 'error' }))
+        const message = result.temporaryFailureCount > 0
+          ? `Verification paused after a temporary provider failure. ${result.pendingCount} model${result.pendingCount === 1 ? '' : 's'} remain pending; refresh to try again.`
+          : `No discovered model passed DocLense's live chat and JSON compatibility check.`
+        setProviderErrors(current => ({ ...current, [provider]: message }))
+        return
       }
-      pushToast(models.length > 0 ? `${providerDefinition(provider).label} connected · ${models.length} models found` : `${providerDefinition(provider).label} connected · enter a model ID manually`)
+      if (result.temporaryFailureCount === 0 && result.pendingCount === 0) await saveVerifiedModelCache(provider, key, models)
+      else clearVerifiedModelCache(provider)
+      if (providerDiscoveryIds.current[provider] !== discoveryId) return
+      const selected = models.some(model => model.id === providerModels[provider]) ? providerModels[provider] : models[0].id
+      setProviderModels(current => ({ ...current, [provider]: selected }))
+      if (provider === activeProviderRef.current) setSettings(current => normalizeSettings({ ...current, model: selected }))
+      setProviderStatuses(current => ({ ...current, [provider]: 'ready' }))
+      const hidden = result.filteredCount + result.unavailableCount + result.incompatibleCount
+      const pending = result.pendingCount
+      setProviderNotices(current => ({
+        ...current,
+        [provider]: `${models.length} verified · ${hidden} unavailable or incompatible${pending > 0 ? ` · ${pending} pending after a temporary failure` : ''}.`,
+      }))
+      pushToast(`${providerDefinition(provider).label} connected · ${models.length} verified model${models.length === 1 ? '' : 's'}`)
     } catch (error) {
+      if (providerDiscoveryIds.current[provider] !== discoveryId) return
       const message = error instanceof Error ? error.message : `Could not connect to ${providerDefinition(provider).label}.`
       setProviderStatuses(current => ({ ...current, [provider]: 'error' }))
       setProviderErrors(current => ({ ...current, [provider]: message }))
+      setProviderProgress(current => ({ ...current, [provider]: undefined }))
     }
   }, [providerConsents, providerKeys, providerModels, pushToast])
 
-  const testProvider = useCallback(async (provider: ProviderId) => {
-    const modelId = providerModels[provider]
-    try {
-      await testProviderModel({ provider, apiKey: providerKeys[provider], model: modelId, consent: providerConsents[provider] })
-      const models = withModelCompatibility(modelCatalogs[provider] ?? [], modelId, 'verified', 'A lightweight JSON chat request succeeded.')
-      setModelCatalogs(current => ({ ...current, [provider]: models }))
-      saveCachedCatalog(provider, models)
-      setProviderStatuses(current => ({ ...current, [provider]: 'ready' }))
-      setProviderErrors(current => ({ ...current, [provider]: undefined }))
-      pushToast(`${providerDefinition(provider).label} model compatibility confirmed`)
-    } catch (error) {
-      const category = providerErrorCategory(error)
-      const incompatible = category === 'model' || category === 'request'
-      const baseMessage = error instanceof Error ? error.message : 'The compatibility test failed.'
-      const message = incompatible ? `${baseMessage} Choose another model and run Test.` : baseMessage
-      if (incompatible) {
-        const reason = category === 'model'
-          ? 'The provider reports that this model is unavailable for hosted chat requests.'
-          : 'This model rejected the JSON chat format required for evidence-checked analysis.'
-        const models = withModelCompatibility(modelCatalogs[provider] ?? [], modelId, 'incompatible', reason)
-        setModelCatalogs(current => ({ ...current, [provider]: models }))
-        saveCachedCatalog(provider, models)
-      }
-      setProviderErrors(current => ({ ...current, [provider]: message }))
-      pushToast(message, 'error')
-    }
-  }, [modelCatalogs, providerConsents, providerKeys, providerModels, pushToast])
-
   const changeActiveProvider = useCallback((provider: ProviderId) => {
+    activeProviderRef.current = provider
     setActiveProvider(provider)
-    setSettings(current => normalizeSettings({ ...current, model: providerModels[provider] || current.model }))
-  }, [providerModels])
+    setSettings(current => normalizeSettings({ ...current, model: providerModels[provider] }))
+    if (providerKeys[provider].trim() && providerConsents[provider]) void connectProvider(provider)
+  }, [connectProvider, providerConsents, providerKeys, providerModels])
 
   const changeProviderModel = useCallback((provider: ProviderId, model: string) => {
+    if (!modelCatalogs[provider]?.some(candidate => candidate.id === model && candidate.compatibility === 'verified')) return
     setProviderModels(current => ({ ...current, [provider]: model }))
     setProviderErrors(current => ({ ...current, [provider]: undefined }))
     if (provider === activeProvider) setSettings(current => normalizeSettings({ ...current, model }))
-  }, [activeProvider])
+  }, [activeProvider, modelCatalogs])
+
+  const changeProviderKey = useCallback((provider: ProviderId, key: string) => {
+    providerDiscoveryIds.current[provider] += 1
+    clearVerifiedModelCache(provider)
+    setProviderKeys(current => ({ ...current, [provider]: key }))
+    setProviderModels(current => ({ ...current, [provider]: '' }))
+    setModelCatalogs(current => ({ ...current, [provider]: [] }))
+    setProviderStatuses(current => ({ ...current, [provider]: 'idle' }))
+    setProviderErrors(current => ({ ...current, [provider]: undefined }))
+    setProviderNotices(current => ({ ...current, [provider]: undefined }))
+    setProviderProgress(current => ({ ...current, [provider]: undefined }))
+  }, [])
+
+  const changeProviderConsent = useCallback((provider: ProviderId, consent: boolean) => {
+    setProviderConsents(current => ({ ...current, [provider]: consent }))
+    if (consent && providerKeys[provider].trim()) void connectProvider(provider, false, true)
+  }, [connectProvider, providerKeys])
 
   const invalidateScope = useCallback(() => {
     generationAbortRef.current?.abort()
@@ -381,6 +403,7 @@ export default function AppShell() {
     setResult(null)
     setShowResults(false)
     setGenError(null)
+    setFailedSections([])
     setMessages([])
     setActiveCitation(null)
   }, [])
@@ -564,6 +587,7 @@ export default function AppShell() {
     setResult(null)
     setShowResults(false)
     setGenError(null)
+    setFailedSections([])
     setMessages([])
     setUploadError(null)
     setPendingOcr(null)
@@ -575,26 +599,27 @@ export default function AppShell() {
   // ---------- generate ----------
   const selectedCount = SECTION_KEYS.filter(k => sections[k]).length
 
-  const generate = useCallback(async () => {
+  const generate = useCallback(async (retrySections?: AnalysisSection[]) => {
     if (!uploaded || generating) return
     if (selectedDocuments.length === 0) {
       pushToast('Select at least one document for analysis', 'error')
       return
     }
-    const chosen = SECTION_KEYS.filter(k => sections[k])
+    const chosen = retrySections?.length ? retrySections : SECTION_KEYS.filter(k => sections[k])
     if (chosen.length === 0) {
       pushToast('Pick at least one thing to generate', 'error')
       return
     }
     if (!activeReady) {
       const incompatible = providerMode === 'manual' && execution.providers[activeProvider]?.compatibility === 'incompatible'
-      pushToast(incompatible ? 'Choose a compatible model and run Test before analysis.' : `Configure ${providerDefinition(activeProvider).label}, choose a model, and allow API usage first`, 'error')
+      pushToast(incompatible ? 'Refresh models and choose a live-verified model before analysis.' : `Configure ${providerDefinition(activeProvider).label}, choose a model, and allow API usage first`, 'error')
       setSidebarOpen(true)
       return
     }
     setGenStage(0)
     setGenerating(true)
     setGenError(null)
+    setFailedSections([])
     setAnalysisProgress(null)
     generationAbortRef.current?.abort()
     const controller = new AbortController()
@@ -602,18 +627,30 @@ export default function AppShell() {
     try {
       const res = await callAI(execution, settings, chosen as AnalysisSection[], selectedDocuments, controller.signal, setAnalysisProgress)
       const gen: GeneratedMap = {
-        summary: chosen.includes('summary'),
-        keyPoints: chosen.includes('keyPoints'),
-        keywords: chosen.includes('keywords'),
-        sentiment: chosen.includes('sentiment'),
-        quiz: chosen.includes('quiz'),
+        summary: Boolean(res.summary && res.title && res.oneLiner),
+        keyPoints: Boolean(res.keyPoints),
+        keywords: Boolean(res.keywords),
+        sentiment: Boolean(res.sentiment),
+        quiz: Boolean(res.quiz),
       }
-      setResult(res)
-      setGenerated(gen)
+      const failures = res.failures as AnalysisFailures
+      const failed = chosen.filter(section => Boolean(failures[section]))
+      setResult(current => ({ ...(current ?? {}), ...res }))
+      setGenerated(current => ({
+        summary: current.summary || gen.summary,
+        keyPoints: current.keyPoints || gen.keyPoints,
+        keywords: current.keywords || gen.keywords,
+        sentiment: current.sentiment || gen.sentiment,
+        quiz: current.quiz || gen.quiz,
+      }))
+      setFailedSections(failed)
+      setGenError(failed.length > 0
+        ? `Verified results were kept. Still needs attention: ${failed.map(section => failures[section] ? `${section}: ${failures[section]}` : section).join(' ')}`
+        : null)
       setShowResults(true)
       pinToTop()
       // fire the tiny toast a beat later so it doesn't fight the jump
-      window.setTimeout(() => pushToast('Analysis complete'), 150)
+      window.setTimeout(() => pushToast(failed.length > 0 ? `${chosen.length - failed.length} output${chosen.length - failed.length === 1 ? '' : 's'} verified; ${failed.length} can be retried` : 'Analysis complete', failed.length > 0 ? 'error' : 'ok'), 150)
       setHistory(saveHistoryEntry({
         fileName: selectedDocuments.length === 1 ? selectedDocuments[0].fileName : `${selectedDocuments.length}-document workspace`,
         kind: selectedDocuments.length === 1 ? selectedDocuments[0].kind : 'TEXT',
@@ -627,6 +664,7 @@ export default function AppShell() {
     } catch (err) {
       if ((err as Error).name === 'AbortError') return
       const message = err instanceof FriendlyError ? err.message : 'Something unexpected went wrong. Please try again.'
+      setFailedSections([])
       setGenError(message)
       pushToast(message, 'error')
     } finally {
@@ -648,7 +686,7 @@ export default function AppShell() {
     }
     if (!activeReady) {
       const incompatible = providerMode === 'manual' && execution.providers[activeProvider]?.compatibility === 'incompatible'
-      pushToast(incompatible ? 'Choose a compatible model and run Test before asking a question.' : `Configure ${providerDefinition(activeProvider).label} in the sidebar first`, 'error')
+      pushToast(incompatible ? 'Refresh models and choose a live-verified model before asking a question.' : `Configure ${providerDefinition(activeProvider).label} in the sidebar first`, 'error')
       setSidebarOpen(true)
       return
     }
@@ -751,11 +789,7 @@ export default function AppShell() {
         setProviderPriority={setProviderPriority}
         providerKeys={providerKeys}
         providerKeyPersistence={providerKeyPersistence}
-        setProviderKey={(provider, key) => {
-          setProviderKeys(current => ({ ...current, [provider]: key }))
-          setProviderStatuses(current => ({ ...current, [provider]: 'idle' }))
-          setProviderErrors(current => ({ ...current, [provider]: undefined }))
-        }}
+        setProviderKey={changeProviderKey}
         onSaveProviderKey={persistProviderKey}
         onRemoveProviderKey={deleteProviderKey}
         providerModels={providerModels}
@@ -763,10 +797,11 @@ export default function AppShell() {
         modelCatalogs={modelCatalogs}
         providerStatuses={providerStatuses}
         providerErrors={providerErrors}
+        providerNotices={providerNotices}
+        providerProgress={providerProgress}
         providerConsents={providerConsents}
-        setProviderConsent={(provider, consent) => setProviderConsents(current => ({ ...current, [provider]: consent }))}
+        setProviderConsent={changeProviderConsent}
         onConnectProvider={(provider, refresh) => { void connectProvider(provider, refresh) }}
-        onTestProvider={provider => { void testProvider(provider) }}
         settings={settings}
         updateSettings={updateSettings}
         onResetSettings={resetSettings}
@@ -1035,7 +1070,7 @@ export default function AppShell() {
                     {/* ---- generate row ---- */}
                     <div className="mt-3.5 flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
                       <div className="min-w-0">
-                        <p className="text-[11px] font-semibold text-ink-soft dark:text-text-dark-soft"><span className="font-extrabold text-moss-deep dark:text-gold-dark">{selectedCount} of 5</span> insights · {selectedDocuments.length} source{selectedDocuments.length === 1 ? '' : 's'} · {settings.analysisMode} mode · ≤{Math.ceil(settings.maxChunks / 2) + 2} requests</p>
+                        <p className="text-[11px] font-semibold text-ink-soft dark:text-text-dark-soft"><span className="font-extrabold text-moss-deep dark:text-gold-dark">{selectedCount} of 5</span> insights · {selectedDocuments.length} source{selectedDocuments.length === 1 ? '' : 's'} · {settings.analysisMode} mode · bounded section retries</p>
                         {analysisProgress?.provider ? <p className="mt-1 text-[10px] font-bold text-moss-deep dark:text-emerald-300">Active: {analysisProgress.provider} · {analysisProgress.model}</p> : null}
                         {!activeReady && (
                           <button onClick={() => setSidebarOpen(true)} className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-bold text-[#a33a10] underline decoration-persimmon/50 underline-offset-2 transition hover:text-persimmon dark:text-persimmon-dark"><KeyRound size={11} />Configure a provider, model, key, and usage consent<ArrowRight size={11} /></button>
@@ -1043,7 +1078,7 @@ export default function AppShell() {
                         {selectedDocuments.length === 0 ? <p className="mt-1 text-[11px] font-bold text-[#a33a10] dark:text-persimmon-dark">Select at least one document to enable analysis.</p> : null}
                       </div>
                       <button
-                        onClick={generating ? () => generationAbortRef.current?.abort() : generate}
+                        onClick={generating ? () => generationAbortRef.current?.abort() : () => void generate()}
                         disabled={!generating && (selectedCount === 0 || selectedDocuments.length === 0)}
                         className="group inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-persimmon px-6 py-4 font-sans text-[15px] font-extrabold text-cream shadow-[0_4px_0_#b93a17] transition hover:bg-persimmon-soft active:translate-y-0.5 active:shadow-[0_2px_0_#b93a17] disabled:cursor-not-allowed disabled:opacity-70 dark:bg-persimmon-dark dark:text-[#2b1206] dark:shadow-[0_4px_0_#b4532a]"
                       >
@@ -1058,7 +1093,13 @@ export default function AppShell() {
                       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-moss-mist dark:bg-white/10"><motion.div className="h-full rounded-full bg-gradient-to-r from-persimmon via-gold to-moss" animate={{ width: `${analysisProgress && analysisProgress.total > 0 ? Math.max(8, (analysisProgress.completed / analysisProgress.total) * 85 + (analysisProgress.phase === 'synthesizing' ? 10 : 0)) : ((genStage + 1) / GEN_STAGES.length) * 100}%` }} transition={{ ease: 'easeOut', duration: 0.6 }} /></div>
                     )}
                     {genError && (
-                      <div role="alert" className="mt-3 flex items-start gap-2 rounded-2xl border border-persimmon/40 bg-persimmon-mist px-3.5 py-2.5 text-[12.5px] font-semibold leading-snug text-[#8a2c0d] dark:border-persimmon-dark/35 dark:bg-persimmon-dark/10 dark:text-persimmon-dark"><CircleAlert size={15} className="mt-0.5 shrink-0" />{genError}</div>
+                      <div role="alert" className="mt-3 flex items-start gap-2 rounded-2xl border border-persimmon/40 bg-persimmon-mist px-3.5 py-2.5 text-[12.5px] font-semibold leading-snug text-[#8a2c0d] dark:border-persimmon-dark/35 dark:bg-persimmon-dark/10 dark:text-persimmon-dark">
+                        <CircleAlert size={15} className="mt-0.5 shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p>{genError}</p>
+                          {failedSections.length > 0 && !generating ? <button type="button" onClick={() => void generate(failedSections)} className="mt-2 rounded-lg border border-persimmon/35 bg-cream/70 px-2.5 py-1 text-[11px] font-extrabold uppercase tracking-wide transition hover:bg-cream dark:bg-black/10 dark:hover:bg-black/20">Retry failed sections</button> : null}
+                        </div>
+                      </div>
                     )}
                   </div>
                 </section>

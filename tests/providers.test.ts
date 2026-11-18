@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
   discoverProviderModels,
+  discoverAndVerifyProviderModels,
   normalizeModelCatalog,
   PROVIDER_REQUEST_TIMEOUT_MS,
   providerErrorCategory,
@@ -23,18 +24,30 @@ const validChatPayload = {
   response_format: { type: 'json_object' },
   messages: [{ role: 'user', content: 'Return JSON.' }],
 }
+const compatibleProbe = {
+  compatible: true,
+  title: 'Schema check',
+  oneLiner: 'All required fields are present.',
+  summary: { text: 'Evidence is present.', citations: [{ sourceId: 's1', excerpt: 'Evidence is present.' }] },
+  keyPoints: [{ text: 'Evidence is present.', citations: [{ sourceId: 's1', excerpt: 'Evidence is present.' }] }],
+  keywords: ['evidence', 'schema'],
+  sentiment: { label: 'Neutral', score: 0, confidence: 100, summary: 'The tone is neutral.', tones: ['neutral'] },
+  quiz: [{ question: 'What is present?', options: ['Evidence', 'Noise', 'Nothing', 'Unknown'], answer: 0, explanation: 'The source says evidence is present.', difficulty: 'easy', citations: [{ sourceId: 's1', excerpt: 'Evidence is present.' }] }],
+  answer: { text: 'Evidence is present.', citations: [{ sourceId: 's1', excerpt: 'Evidence is present.' }] },
+  digests: [{ chunkId: 'c1', overview: 'Evidence is present.', claims: [{ text: 'Evidence is present.', citations: [{ sourceId: 's1', excerpt: 'Evidence is present.' }] }], keywords: ['evidence'] }],
+}
 
 describe('provider discovery and compatibility', () => {
   test('keeps likely chat models, marks unknown models, and filters known non-text models', () => {
-    const models = normalizeModelCatalog({ data: [
+    const models = normalizeModelCatalog('openai', { data: [
       { id: 'meta/llama-3.3-70b-instruct', context_window: 131_072, active: true, type: 'chat' },
       { id: 'nvidia/nemotron-text-model', active: true },
       { id: 'vendor/new-model', active: true },
       { id: 'whisper-large-v3', active: true },
     ] })
-    expect(models.find(model => model.id.includes('llama'))).toMatchObject({ compatibility: 'verified', contextWindow: 131_072 })
+    expect(models.find(model => model.id.includes('llama'))).toMatchObject({ compatibility: 'unverified', contextWindow: 131_072 })
     expect(models.find(model => model.id.includes('nemotron'))).toMatchObject({ compatibility: 'unverified' })
-    expect(models.find(model => model.id === 'vendor/new-model')).toMatchObject({ compatibility: 'unverified' })
+    expect(models.find(model => model.id === 'vendor/new-model')).toMatchObject({ compatibility: 'incompatible' })
     expect(models.find(model => model.id.includes('whisper'))).toMatchObject({ compatibility: 'incompatible' })
   })
 
@@ -60,6 +73,47 @@ describe('provider discovery and compatibility', () => {
     expect((fetchMock.mock.calls[0][1] as RequestInit).credentials).toBe('omit')
   })
 
+  test('exposes only models that pass live DocLense compatibility verification', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [
+        { id: 'vendor/active-chat', active: true, context_window: 32_768 },
+        { id: 'vendor/retired-chat', active: true, context_window: 32_768 },
+        { id: 'whisper-large-v3', active: true, context_window: 448 },
+        { id: 'vendor/shutting-down-chat', active: true, shutdown_date: '2026-12-01' },
+      ] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(compatibleProbe) } }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { category: 'model', message: 'Model is not available to this key.' } }), { status: 404 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await discoverAndVerifyProviderModels('nvidia', 'nvapi-test')
+
+    expect(result.models).toHaveLength(1)
+    expect(result.models[0]).toMatchObject({ id: 'vendor/active-chat', compatibility: 'verified', structuredJson: true })
+    expect(result.models[0].verifiedAt).toEqual(expect.any(Number))
+    expect(result).toMatchObject({ discoveredCount: 4, candidateCount: 2, filteredCount: 2, unavailableCount: 1, pendingCount: 0 })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  test('keeps rate-limited models pending instead of marking them incompatible', async () => {
+    const progress: Array<{ phase: string; checked: number; total: number }> = []
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [
+        { id: 'a-chat', active: true },
+        { id: 'b-chat', active: true },
+        { id: 'c-chat', active: true },
+      ] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(compatibleProbe) } }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { category: 'rate_limit', message: 'Try again later.' } }), { status: 429 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await discoverAndVerifyProviderModels('groq', 'gsk-test', { onProgress: value => progress.push(value) })
+
+    expect(result.models.map(model => model.id)).toEqual(['a-chat'])
+    expect(result).toMatchObject({ temporaryFailureCount: 1, pendingCount: 2, incompatibleCount: 0 })
+    expect(progress.at(-1)).toEqual({ phase: 'verifying', checked: 2, total: 3 })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
   test('reports a malformed local key as authentication instead of a network outage', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
@@ -73,9 +127,23 @@ describe('provider discovery and compatibility', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  test.each(['groq', 'nvidia', 'deepseek', 'openai'] as const)('reports an invalid %s key as authentication', async provider => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { category: 'auth', message: 'The provider rejected this API key.' },
+    }), { status: 401 })))
+    await expect(discoverAndVerifyProviderModels(provider, 'invalid-key')).rejects.toMatchObject({ category: 'auth' })
+  })
+
+  test('keeps provider outages retryable during discovery', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { category: 'temporary', message: 'The provider is temporarily unavailable.' },
+    }), { status: 503 })))
+    await expect(discoverAndVerifyProviderModels('openai', 'sk-test')).rejects.toMatchObject({ category: 'temporary' })
+  })
+
   test('sends a gateway-valid lightweight compatibility request', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      choices: [{ message: { content: '{"compatible":true}' } }],
+      choices: [{ message: { content: JSON.stringify(compatibleProbe) } }],
     }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -93,7 +161,7 @@ describe('provider discovery and compatibility', () => {
       payload: {
         model: 'nvidia/test-chat-model',
         temperature: 0,
-        max_tokens: 1_024,
+        max_tokens: 512,
         top_p: 0.95,
       },
     })
@@ -112,7 +180,7 @@ describe('provider discovery and compatibility', () => {
 
     const run = (provider: 'groq' | 'nvidia' | 'deepseek' | 'openai', model: string) => runProviderCompletion({
       mode: 'manual', activeProvider: provider, priority: [provider],
-      providers: { [provider]: { provider, apiKey: 'test-key', model, consent: true } },
+      providers: { [provider]: { provider, apiKey: 'test-key', model, consent: true, compatibility: 'verified' } },
     }, messages, { maxTokens: 512, temperature: 0.4 })
 
     await run('groq', 'openai/gpt-oss-120b')
@@ -135,6 +203,7 @@ describe('provider discovery and compatibility', () => {
       max_completion_tokens: 512,
       messages: [{ role: 'developer', content: 'Return JSON.' }, { role: 'user', content: 'Do it.' }],
       response_format: { type: 'json_object' },
+      reasoning_effort: 'low',
     })
     expect(bodies[3]).not.toHaveProperty('max_tokens')
     expect(bodies[3]).not.toHaveProperty('temperature')
@@ -156,9 +225,16 @@ describe('provider discovery and compatibility', () => {
 
   test('accepts a compatible JSON object after provider reasoning text', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      choices: [{ message: { content: 'Reasoning complete.\n```json\n{"compatible":true}\n```' } }],
+      choices: [{ message: { content: `Reasoning complete.\n\`\`\`json\n${JSON.stringify(compatibleProbe)}\n\`\`\`` } }],
     }), { status: 200 })))
     await expect(testProviderModel({ provider: 'nvidia', apiKey: 'nvapi-test', model: 'nvidia/reasoning-model', consent: true })).resolves.toBeUndefined()
+  })
+
+  test('rejects a probe response that omits real analysis fields', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: '{"compatible":true,"summary":{"text":"ok","citations":[]}}' } }],
+    }), { status: 200 })))
+    await expect(testProviderModel({ provider: 'groq', apiKey: 'gsk-test', model: 'weak-chat-model', consent: true })).rejects.toMatchObject({ category: 'output' })
   })
 
   test('treats a non-JSON probe as retryable instead of permanently blocking the model', async () => {
@@ -172,7 +248,7 @@ describe('provider discovery and compatibility', () => {
       failure = error
     }
     expect(providerErrorCategory(failure)).toBe('output')
-    expect(failure).toMatchObject({ message: 'NVIDIA NIM returned a non-JSON test response. Run Test again; if it repeats, choose another model.' })
+    expect(failure).toMatchObject({ message: 'NVIDIA NIM did not return the required DocLense JSON shape.' })
   })
 
   test('explains a compatibility probe that exhausts its output budget', async () => {
@@ -186,7 +262,7 @@ describe('provider discovery and compatibility', () => {
       failure = error
     }
     expect(providerErrorCategory(failure)).toBe('output')
-    expect(failure).toMatchObject({ message: 'NVIDIA NIM ended the test before returning JSON. Run Test again; if it repeats, choose another model.' })
+    expect(failure).toMatchObject({ message: 'NVIDIA NIM ended verification before returning the required JSON.' })
   })
 })
 describe('provider fallback and proxy privacy', () => {
@@ -198,8 +274,8 @@ describe('provider fallback and proxy privacy', () => {
     const execution: AIExecutionConfig = {
       mode: 'automatic', activeProvider: 'groq', priority: ['groq', 'nvidia', 'deepseek', 'openai'],
       providers: {
-        groq: { provider: 'groq', apiKey: 'gsk-test', model: 'llama-chat', consent: true },
-        nvidia: { provider: 'nvidia', apiKey: 'nvapi-test', model: 'meta/llama-instruct', consent: true },
+        groq: { provider: 'groq', apiKey: 'gsk-test', model: 'llama-chat', consent: true, compatibility: 'verified' },
+        nvidia: { provider: 'nvidia', apiKey: 'nvapi-test', model: 'meta/llama-instruct', consent: true, compatibility: 'verified' },
       },
     }
     const events: string[] = []
@@ -217,8 +293,8 @@ describe('provider fallback and proxy privacy', () => {
     const execution: AIExecutionConfig = {
       mode: 'automatic', activeProvider: 'nvidia', priority: ['nvidia', 'groq', 'deepseek', 'openai'],
       providers: {
-        nvidia: { provider: 'nvidia', apiKey: 'nvapi-test', model: 'nvidia/slow-model', consent: true },
-        groq: { provider: 'groq', apiKey: 'gsk-test', model: 'llama-chat', consent: true },
+        nvidia: { provider: 'nvidia', apiKey: 'nvapi-test', model: 'nvidia/slow-model', consent: true, compatibility: 'verified' },
+        groq: { provider: 'groq', apiKey: 'gsk-test', model: 'llama-chat', consent: true, compatibility: 'verified' },
       },
     }
     const events: string[] = []
@@ -240,8 +316,8 @@ describe('provider fallback and proxy privacy', () => {
     const execution: AIExecutionConfig = {
       mode: 'automatic', activeProvider: 'nvidia', priority: ['nvidia', 'deepseek'],
       providers: {
-        nvidia: { provider: 'nvidia', apiKey: 'nvapi-test', model: 'nvidia/slow-model', consent: true },
-        deepseek: { provider: 'deepseek', apiKey: 'sk-test', model: 'deepseek-chat', consent: true },
+        nvidia: { provider: 'nvidia', apiKey: 'nvapi-test', model: 'nvidia/slow-model', consent: true, compatibility: 'verified' },
+        deepseek: { provider: 'deepseek', apiKey: 'sk-test', model: 'deepseek-chat', consent: true, compatibility: 'verified' },
       },
     }
     const request = runProviderCompletion(execution, [{ role: 'user', content: 'Return JSON.' }], { maxTokens: 32, temperature: 0 })
@@ -264,7 +340,7 @@ describe('provider fallback and proxy privacy', () => {
       } }, 'nvapi-test'),
       proxyAIRequest({ action: 'chat', provider: 'openai', payload: {
         model: 'o3-mini', messages: [{ role: 'developer', content: 'Return JSON.' }, ...messages],
-        max_completion_tokens: 256, response_format: { type: 'json_object' },
+        max_completion_tokens: 256, response_format: { type: 'json_object' }, reasoning_effort: 'low',
       } }, 'sk-test'),
     ]
     await expect(Promise.all(requests)).resolves.toEqual(expect.arrayContaining([
@@ -275,22 +351,18 @@ describe('provider fallback and proxy privacy', () => {
     expect(upstream).toHaveBeenCalledTimes(3)
   })
 
-  test('retries a structured-output generation failure instead of treating it as a permanent 400', async () => {
+  test('returns structured-output failures to the section recovery layer without duplicate transport retries', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
         error: { category: 'output', message: 'Groq could not produce valid structured JSON for this request.' },
       }), { status: 400, headers: { 'Retry-After': '0.001' } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     const execution: AIExecutionConfig = {
       mode: 'manual', activeProvider: 'groq', priority: ['groq'],
-      providers: { groq: { provider: 'groq', apiKey: 'gsk-test', model: 'openai/gpt-oss-20b', consent: true } },
+      providers: { groq: { provider: 'groq', apiKey: 'gsk-test', model: 'openai/gpt-oss-20b', consent: true, compatibility: 'verified' } },
     }
-    const events: string[] = []
-    const result = await runProviderCompletion(execution, [{ role: 'user', content: 'Return JSON.' }], { maxTokens: 1_600, temperature: 0.2, onEvent: event => events.push(event.type) })
-    expect(result.content).toBe('{"ok":true}')
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(events).toContain('retry')
+    await expect(runProviderCompletion(execution, [{ role: 'user', content: 'Return JSON.' }], { maxTokens: 1_600, temperature: 0.2 })).rejects.toMatchObject({ category: 'output' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   test('forwards credentials only as a transient authorization header and sanitizes errors', async () => {
@@ -303,6 +375,18 @@ describe('provider fallback and proxy privacy', () => {
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-super-secret')
     expect(init.body).toBeUndefined()
     expect(result.headers['Cache-Control']).toBe('no-store')
+  })
+
+  test.each([
+    ['groq', 'https://api.groq.com/openai/v1/models'],
+    ['nvidia', 'https://integrate.api.nvidia.com/v1/models'],
+    ['deepseek', 'https://api.deepseek.com/models'],
+    ['openai', 'https://api.openai.com/v1/models'],
+  ] as const)('uses the official %s discovery endpoint', async (provider, expectedUrl) => {
+    const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [] }), { status: 200 }))
+    vi.stubGlobal('fetch', upstream)
+    await expect(proxyAIRequest({ action: 'models', provider }, 'test-key')).resolves.toMatchObject({ status: 200 })
+    expect(upstream.mock.calls[0][0]).toBe(expectedUrl)
   })
 
   test('rejects cross-origin, malformed, and SSRF-shaped gateway requests before fetch', async () => {

@@ -19,6 +19,8 @@ import {
   type DocumentModel,
 } from './document'
 import {
+  executionOutputLimit,
+  executionOutputTokenMultiplier,
   providerDefinition,
   providerErrorDetails,
   runProviderCompletion,
@@ -29,13 +31,6 @@ import { serializeUntrustedDocument } from './documentSecurity'
 
 const MAX_QUESTION_CHARS = 2_000
 const MAX_HISTORY_MESSAGE_CHARS = 4_000
-
-export const GROQ_MODELS = [
-  { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B', note: 'Best for complex evidence synthesis' },
-  { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B', note: 'Faster for short documents' },
-  { id: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B', note: 'Large open-weight model' },
-  { id: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B', note: 'Compact open-weight model' },
-] as const
 
 export const SUPPORTED_LANGUAGES = ['English', 'Spanish', 'French', 'German', 'Italian', 'Portuguese', 'Dutch', 'Hindi', 'Chinese (Simplified)', 'Japanese', 'Korean', 'Arabic'] as const
 
@@ -99,6 +94,7 @@ export interface AnalysisProgress {
 }
 
 export type AnalysisSection = 'summary' | 'keyPoints' | 'keywords' | 'sentiment' | 'quiz'
+export type AnalysisFailures = Partial<Record<AnalysisSection, string>>
 export type GroqMessage = { role: 'system' | 'user' | 'assistant'; content: string }
 
 export class FriendlyError extends Error {
@@ -128,10 +124,10 @@ const CitedTextCandidateSchema = z.object({
 })
 const SentimentSchema = z.object({
   label: z.enum(['Positive', 'Neutral', 'Negative', 'Mixed']),
-  score: z.number().finite(),
-  confidence: z.number().finite(),
+  score: z.number().finite().min(-100).max(100),
+  confidence: z.number().finite().min(0).max(100),
   summary: z.string().min(1).max(2_000),
-  tones: z.array(z.string().min(1).max(100)).max(6),
+  tones: z.array(z.string().min(1).max(100)).min(2).max(4),
 })
 const QuizQuestionSchema = z.object({
   question: z.string().min(1).max(1_000),
@@ -141,15 +137,15 @@ const QuizQuestionSchema = z.object({
   difficulty: z.enum(['easy', 'medium', 'hard']),
   citations: z.array(CitationCandidateSchema).min(1).max(4),
 })
-const AnalysisEnvelopeSchema = z.object({
-  title: z.string().min(1).max(300).optional(),
-  oneLiner: z.string().min(1).max(500).optional(),
-  summary: CitedTextCandidateSchema.optional(),
-  keyPoints: z.array(CitedTextCandidateSchema).max(10).optional(),
-  keywords: z.array(z.string().min(1).max(160)).max(20).optional(),
-  sentiment: SentimentSchema.optional(),
-  quiz: z.array(QuizQuestionSchema).max(15).optional(),
+const SummaryEnvelopeSchema = z.object({
+  title: z.string().min(1).max(300),
+  oneLiner: z.string().min(1).max(500),
+  summary: CitedTextCandidateSchema,
 })
+const KeyPointsEnvelopeSchema = z.object({ keyPoints: z.array(CitedTextCandidateSchema).min(5).max(7) })
+const KeywordsEnvelopeSchema = z.object({ keywords: z.array(z.string().min(1).max(160)).min(8).max(12) })
+const SentimentEnvelopeSchema = z.object({ sentiment: SentimentSchema })
+const QuizEnvelopeSchema = z.object({ quiz: z.array(QuizQuestionSchema).min(1).max(5) })
 const ChunkDigestSchema = z.object({
   chunkId: z.string().min(1).max(120),
   overview: z.string().min(1).max(2_000),
@@ -162,8 +158,6 @@ const ChatAnswerSchema = z.object({
   text: z.string().min(1).max(5_000),
   citations: z.array(CitationCandidateSchema).max(6),
 })
-
-type AnalysisEnvelope = z.infer<typeof AnalysisEnvelopeSchema>
 
 interface ChunkDigest {
   chunkId: string
@@ -222,7 +216,7 @@ export function normalizeSettings(settings: AnalysisSettings): AnalysisSettings 
   const defaultChunks = mode === 'complete' ? DEFAULT_COMPLETE_CHUNKS : DEFAULT_SAMPLED_CHUNKS
 
   return {
-    model: typeof settings.model === 'string' && settings.model.trim() && settings.model.length <= 200 ? settings.model.trim() : GROQ_MODELS[0].id,
+    model: typeof settings.model === 'string' && settings.model.length <= 200 ? settings.model.trim() : '',
     temperature: clamp(Number(settings.temperature), 0, 1.2),
     maxTokens: Math.round(clamp(Number(settings.maxTokens), 256, 4096)),
     summaryStyle: allowedStyles.has(settings.summaryStyle) ? settings.summaryStyle : 'concise',
@@ -281,17 +275,18 @@ async function requestValidated<T>(options: ValidatedRequestOptions<T>): Promise
   let temperature = options.temperature
   let repairsRemaining = 1
   for (;;) {
-    const rawText = await postAI(options.execution, [...options.messages, ...correction], options.maxTokens, temperature, options.signal, options.onProviderEvent)
+    let rawText = ''
     try {
+      rawText = await postAI(options.execution, [...options.messages, ...correction], options.maxTokens, temperature, options.signal, options.onProviderEvent)
       return { value: options.validate(parseJsonLoose(rawText)), rawText }
     } catch (error) {
-      const validationError = error instanceof ValidationFailure || error instanceof z.ZodError
+      const validationError = error instanceof ValidationFailure || error instanceof z.ZodError || (error instanceof FriendlyError && error.code === 'BAD_JSON')
       if (!validationError || repairsRemaining <= 0) throw error
       repairsRemaining -= 1
       options.onRetry?.()
       correction = [
-        { role: 'assistant', content: short(rawText, 4_000) },
-        { role: 'user', content: `The JSON failed validation: ${validationSummary(error)}. Return one corrected JSON object only. Keep every citation excerpt verbatim from its named source.` },
+        ...(rawText ? [{ role: 'assistant' as const, content: short(rawText, 4_000) }] : []),
+        { role: 'user', content: `The prior response failed validation: ${validationSummary(error)}. Return one complete corrected JSON object only. Keep every citation excerpt verbatim from its named source.` },
       ]
       temperature = 0
     }
@@ -326,16 +321,22 @@ const citationInstructions = [
   'Return one JSON object only without Markdown fences.',
 ].join('\n')
 
-function finalSystemPrompt(settings: AnalysisSettings, sections: AnalysisSection[]): string {
+function requestedFieldNames(sections: AnalysisSection[]): string[] {
+  return sections.flatMap(section => section === 'summary' ? ['title', 'oneLiner', 'summary'] : [section])
+}
+
+function finalSystemPrompt(settings: AnalysisSettings, sections: AnalysisSection[], quizCount: number = settings.quizQuestions): string {
   const difficulty = settings.quizDifficulty === 'adaptive' ? 'Use a balanced mix of easy, medium, and hard questions.' : `Make quiz questions ${settings.quizDifficulty}.`
+  const fields = requestedFieldNames(sections)
   return [
     'You are DocLense, a meticulous evidence-first document analysis assistant.',
     styleInstructions(settings),
-    `Return only these requested fields: ${sections.join(', ')}. Include title and oneLiner when summary is requested.`,
+    `Return exactly one JSON object with these top-level keys and no others: ${fields.join(', ')}. Every listed key is required.`,
     citationInstructions,
-    'Summary shape: {"text": string, "citations": Citation[]}. keyPoints is an array of the same shape.',
+    'title and oneLiner are non-empty strings. summary is {"text": string, "citations": Citation[]}.',
+    'keyPoints contains exactly 5–7 distinct items with the same cited-text shape.',
     'keywords contains 8–12 short lowercase topics. sentiment contains label, score (-100..100), confidence (0..100), summary, and 2–4 tones.',
-    `quiz contains exactly ${settings.quizQuestions} questions with exactly four options, zero-based answer, explanation, difficulty, and source citations. ${difficulty}`,
+    `quiz contains exactly ${quizCount} questions, all distinct, with exactly four options, zero-based answer, explanation, difficulty, and source citations. ${difficulty}`,
     'Never invent facts unsupported by the supplied sources. Distinguish documents when evidence comes from more than one file.',
   ].join('\n')
 }
@@ -401,51 +402,59 @@ function normalizeCitedText(candidate: z.infer<typeof CitedTextCandidateSchema>,
   }
 }
 
-function normalizeAnalysis(parsed: unknown, requested: AnalysisSection[], documents: DocumentModel[], coverage: AnalysisCoverage, settings: AnalysisSettings): Partial<AnalysisResult> {
-  const value: AnalysisEnvelope = AnalysisEnvelopeSchema.parse(parsed)
-  const result: Partial<AnalysisResult> = { coverage }
-  if (requested.includes('summary')) {
-    if (!value.title || !value.oneLiner || !value.summary) throw new ValidationFailure('Summary, title, or one-line description is missing.')
+function normalizeAnalysisSection(
+  parsed: unknown,
+  section: AnalysisSection,
+  documents: DocumentModel[],
+  expectedQuizCount = 5,
+  priorQuizQuestions: string[] = [],
+): Partial<AnalysisResult> {
+  if (section === 'summary') {
+    const value = SummaryEnvelopeSchema.parse(parsed)
     const summary = normalizeCitedText(value.summary, documents, 8_000)
-    if (!summary) throw new ValidationFailure('Summary has no exact source citation.')
-    result.title = short(value.title, 160)
-    result.oneLiner = short(value.oneLiner, 300)
-    result.summary = summary
+    if (!summary) throw new ValidationFailure('summary has no exact source citation')
+    return { title: short(value.title, 160), oneLiner: short(value.oneLiner, 300), summary }
   }
-  if (requested.includes('keyPoints')) {
-    const keyPoints = (value.keyPoints ?? [])
+  if (section === 'keyPoints') {
+    const value = KeyPointsEnvelopeSchema.parse(parsed)
+    const keyPoints = value.keyPoints
       .map(point => normalizeCitedText(point, documents, 1_000))
       .filter((point): point is CitedText => point !== null)
-      .slice(0, 8)
-    if (keyPoints.length === 0) throw new ValidationFailure('No key point has an exact source citation.')
-    result.keyPoints = keyPoints
+    if (keyPoints.length < 5) throw new ValidationFailure(`keyPoints contains ${keyPoints.length} evidence-checked items; expected 5–7`)
+    return { keyPoints }
   }
-  if (requested.includes('keywords')) {
-    const keywords = (value.keywords ?? []).map(keyword => short(keyword, 120).toLocaleLowerCase()).filter(Boolean).slice(0, 14)
-    if (keywords.length === 0) throw new ValidationFailure('No valid keywords were returned.')
-    result.keywords = keywords
+  if (section === 'keywords') {
+    const value = KeywordsEnvelopeSchema.parse(parsed)
+    const keywords = [...new Set(value.keywords.map(keyword => short(keyword, 120).toLocaleLowerCase()).filter(Boolean))]
+    if (keywords.length < 8) throw new ValidationFailure(`keywords contains ${keywords.length} distinct topics; expected 8–12`)
+    return { keywords: keywords.slice(0, 12) }
   }
-  if (requested.includes('sentiment')) {
-    if (!value.sentiment) throw new ValidationFailure('Sentiment is missing.')
-    result.sentiment = normalizeSentiment(value.sentiment)
+  if (section === 'sentiment') {
+    const value = SentimentEnvelopeSchema.parse(parsed)
+    return { sentiment: normalizeSentiment(value.sentiment) }
   }
-  if (requested.includes('quiz')) {
-    const quiz = (value.quiz ?? []).flatMap((question): QuizQuestion[] => {
-      const citations = validateCitations(question.citations, documents, `${question.question} ${question.explanation}`)
-      if (citations.length === 0) return []
-      return [{
-        question: short(question.question, 500),
-        options: question.options.map(option => short(option, 300)),
-        answer: question.answer,
-        explanation: short(question.explanation, 1_000),
-        difficulty: question.difficulty,
-        citations,
-      }]
-    }).slice(0, settings.quizQuestions)
-    if (quiz.length !== settings.quizQuestions) throw new ValidationFailure(`Quiz contains ${quiz.length} verified questions; expected exactly ${settings.quizQuestions}.`)
-    result.quiz = quiz
-  }
-  return result
+
+  const value = QuizEnvelopeSchema.parse(parsed)
+  if (value.quiz.length !== expectedQuizCount) throw new ValidationFailure(`quiz contains ${value.quiz.length} questions; expected exactly ${expectedQuizCount}`)
+  const prior = new Set(priorQuizQuestions.map(question => question.trim().toLocaleLowerCase()))
+  const seen = new Set<string>()
+  const quiz = value.quiz.flatMap((question): QuizQuestion[] => {
+    const normalizedQuestion = question.question.trim().toLocaleLowerCase()
+    if (prior.has(normalizedQuestion) || seen.has(normalizedQuestion)) return []
+    seen.add(normalizedQuestion)
+    const citations = validateCitations(question.citations, documents, `${question.question} ${question.explanation}`)
+    if (citations.length === 0) return []
+    return [{
+      question: short(question.question, 500),
+      options: question.options.map(option => short(option, 300)),
+      answer: question.answer,
+      explanation: short(question.explanation, 1_000),
+      difficulty: question.difficulty,
+      citations,
+    }]
+  })
+  if (quiz.length !== expectedQuizCount) throw new ValidationFailure(`quiz contains ${quiz.length} new evidence-checked questions; expected exactly ${expectedQuizCount}`)
+  return { quiz }
 }
 
 function validateChunkBatch(parsed: unknown, documents: DocumentModel[], expectedIds: Set<string>): ChunkDigest[] {
@@ -464,7 +473,10 @@ function validateChunkBatch(parsed: unknown, documents: DocumentModel[], expecte
       sentiment: digest.sentiment ? normalizeSentiment(digest.sentiment) : undefined,
     }]
   })
-  if (digests.length === 0) throw new ValidationFailure('Chunk digest contains no exact source evidence.')
+  const returnedIds = new Set(digests.map(digest => digest.chunkId))
+  const missingIds = [...expectedIds].filter(id => !returnedIds.has(id))
+  if (missingIds.length > 0) throw new ValidationFailure(`Chunk digest is missing ${missingIds.length} requested chunk${missingIds.length === 1 ? '' : 's'}.`)
+  if (returnedIds.size !== digests.length) throw new ValidationFailure('Chunk digest contains duplicate chunk IDs.')
   return digests
 }
 
@@ -512,6 +524,182 @@ function analysisBudget(settings: AnalysisSettings): AnalysisBudget {
   }
 }
 
+const SECTION_LABELS: Record<AnalysisSection, string> = {
+  summary: 'Summary, title, and one-line description',
+  keyPoints: 'Key points',
+  keywords: 'Keywords',
+  sentiment: 'Sentiment',
+  quiz: 'Quiz',
+}
+
+function estimatedSectionTokens(section: AnalysisSection, settings: AnalysisSettings, quizCount: number = settings.quizQuestions): number {
+  if (section === 'summary') return settings.summaryStyle === 'detailed' ? 900 : settings.summaryStyle === 'bullets' ? 700 : 550
+  if (section === 'keyPoints') return 900
+  if (section === 'keywords') return 220
+  if (section === 'sentiment') return 360
+  return 260 + quizCount * 220
+}
+
+function partitionSections(sections: AnalysisSection[], settings: AnalysisSettings, outputLimit: number): AnalysisSection[][] {
+  const limit = Math.min(settings.maxTokens, outputLimit)
+  const batches: AnalysisSection[][] = []
+  let batch: AnalysisSection[] = []
+  let estimate = 0
+  for (const section of sections) {
+    const sectionEstimate = estimatedSectionTokens(section, settings)
+    if (batch.length > 0 && estimate + sectionEstimate > limit) {
+      batches.push(batch)
+      batch = []
+      estimate = 0
+    }
+    batch.push(section)
+    estimate += sectionEstimate
+  }
+  if (batch.length > 0) batches.push(batch)
+  return batches
+}
+
+function requestTokenBudget(sections: AnalysisSection[], settings: AnalysisSettings, outputLimit: number, quizCount: number = settings.quizQuestions): number {
+  const estimate = sections.reduce((total, section) => total + estimatedSectionTokens(section, settings, quizCount), 0)
+  return Math.max(256, Math.min(settings.maxTokens, outputLimit, estimate))
+}
+
+function recoverableGenerationError(error: unknown): boolean {
+  return isValidationError(error) || (error instanceof FriendlyError && (error.code === 'BAD_JSON' || error.code === 'UNVERIFIED'))
+}
+
+function sectionFailureMessage(error: unknown): string {
+  if (error instanceof FriendlyError && error.code === 'BAD_JSON') return 'The provider stopped early or returned incomplete JSON.'
+  return validationSummary(error).replace(/\.$/, '') + '.'
+}
+
+interface SectionGenerationOptions {
+  execution: AIExecutionConfig
+  settings: AnalysisSettings
+  sections: AnalysisSection[]
+  documents: DocumentModel[]
+  coverage: AnalysisCoverage
+  sourceContent: string
+  extraSystem?: string
+  signal?: AbortSignal
+  onProgress?: (progress: AnalysisProgress) => void
+  onProviderEvent?: (event: ProviderEvent) => void
+  progressContext: () => Pick<AnalysisProgress, 'provider' | 'model'>
+}
+
+async function generateAnalysisSections(options: SectionGenerationOptions): Promise<Partial<AnalysisResult> & { rawText: string; coverage: AnalysisCoverage; failures: AnalysisFailures }> {
+  const { execution, settings, sections, documents, coverage, sourceContent, extraSystem, signal, onProgress, onProviderEvent } = options
+  const outputLimit = executionOutputLimit(execution)
+  const reasoningMultiplier = executionOutputTokenMultiplier(execution)
+  const result: Partial<AnalysisResult> = { coverage }
+  const failures: AnalysisFailures = {}
+  const rawTexts: string[] = []
+  const visibleOutputLimit = Math.max(256, Math.floor(Math.min(outputLimit, settings.maxTokens) / reasoningMultiplier))
+  const nonQuizBatches = partitionSections(sections.filter(section => section !== 'quiz'), settings, visibleOutputLimit)
+  const quizBatchCount = sections.includes('quiz') ? Math.ceil(settings.quizQuestions / 5) : 0
+  const totalRequests = nonQuizBatches.length + quizBatchCount
+  let completed = 0
+
+  const messagesFor = (requested: AnalysisSection[], quizCount: number = settings.quizQuestions, priorQuizQuestions: string[] = []): GroqMessage[] => [
+    {
+      role: 'system',
+      content: `${finalSystemPrompt(settings, requested, quizCount)}${extraSystem ? `\n${extraSystem}` : ''}`,
+    },
+    {
+      role: 'user',
+      content: `${sourceContent}${priorQuizQuestions.length > 0 ? `\n\nAlready accepted quiz questions (do not repeat or paraphrase these):\n${priorQuizQuestions.map(question => `- ${question}`).join('\n')}` : ''}`,
+    },
+  ]
+
+  const runFocused = async (section: AnalysisSection, quizCount: number = settings.quizQuestions, priorQuizQuestions: string[] = []): Promise<Partial<AnalysisResult> | null> => {
+    try {
+      const response = await requestValidated({
+        execution,
+        settings,
+        messages: messagesFor([section], quizCount, priorQuizQuestions),
+        maxTokens: Math.min(settings.maxTokens, outputLimit, Math.ceil(requestTokenBudget([section], settings, outputLimit, quizCount) * reasoningMultiplier)),
+        temperature: settings.temperature,
+        signal,
+        validate: parsed => normalizeAnalysisSection(parsed, section, documents, quizCount, priorQuizQuestions),
+        onRetry: () => onProgress?.({ phase: 'retrying', completed, total: totalRequests, label: `Repairing ${SECTION_LABELS[section].toLocaleLowerCase()} once…`, ...options.progressContext() }),
+        onProviderEvent,
+      })
+      rawTexts.push(response.rawText)
+      return response.value
+    } catch (error) {
+      if (!recoverableGenerationError(error)) throw error
+      failures[section] = sectionFailureMessage(error)
+      return null
+    }
+  }
+
+  for (const batch of nonQuizBatches) {
+    const failedInBatch: AnalysisSection[] = []
+    if (batch.length === 1) {
+      const partial = await runFocused(batch[0])
+      if (partial) Object.assign(result, partial)
+    } else {
+      try {
+        const rawText = await postAI(
+          execution,
+          messagesFor(batch),
+          Math.min(settings.maxTokens, outputLimit, Math.ceil(requestTokenBudget(batch, settings, outputLimit) * reasoningMultiplier)),
+          settings.temperature,
+          signal,
+          onProviderEvent,
+        )
+        rawTexts.push(rawText)
+        const parsed = parseJsonLoose(rawText)
+        for (const section of batch) {
+          try {
+            Object.assign(result, normalizeAnalysisSection(parsed, section, documents))
+          } catch {
+            failedInBatch.push(section)
+          }
+        }
+      } catch (error) {
+        if (!recoverableGenerationError(error)) throw error
+        failedInBatch.push(...batch)
+      }
+      for (const section of failedInBatch) {
+        const partial = await runFocused(section)
+        if (partial) {
+          Object.assign(result, partial)
+          delete failures[section]
+        }
+      }
+    }
+    completed += 1
+    onProgress?.({ phase: 'synthesizing', completed, total: totalRequests, label: `Validated ${completed} of ${totalRequests} output batches…`, ...options.progressContext() })
+  }
+
+  if (sections.includes('quiz')) {
+    const accepted: QuizQuestion[] = []
+    for (let batchIndex = 0; batchIndex < quizBatchCount; batchIndex += 1) {
+      const quizCount = Math.min(5, settings.quizQuestions - accepted.length)
+      const priorQuestions = accepted.map(question => question.question)
+      const partial = await runFocused('quiz', quizCount, priorQuestions)
+      if (!partial?.quiz) break
+      accepted.push(...partial.quiz)
+      completed += 1
+      onProgress?.({ phase: 'synthesizing', completed, total: totalRequests, label: `Validated ${accepted.length} of ${settings.quizQuestions} quiz questions…`, ...options.progressContext() })
+    }
+    if (accepted.length === settings.quizQuestions) {
+      result.quiz = accepted
+      delete failures.quiz
+    } else {
+      failures.quiz = `Quiz produced ${accepted.length} distinct evidence-checked questions; expected exactly ${settings.quizQuestions}.`
+    }
+  }
+
+  const succeeded = sections.filter(section => section === 'summary' ? Boolean(result.summary && result.title && result.oneLiner) : Boolean(result[section]))
+  if (succeeded.length === 0) {
+    const details = sections.map(section => `${SECTION_LABELS[section]}: ${failures[section] ?? 'No valid output was returned.'}`).join(' ')
+    throw new FriendlyError(`No requested output passed validation. ${details}`, 'UNVERIFIED')
+  }
+  return { ...result, rawText: rawTexts.join('\n'), coverage, failures }
+}
+
 export async function callAI(
   execution: AIExecutionConfig,
   settingsInput: AnalysisSettings,
@@ -519,7 +707,7 @@ export async function callAI(
   input: DocumentModel | DocumentModel[] | string,
   signal?: AbortSignal,
   onProgress?: (progress: AnalysisProgress) => void,
-): Promise<Partial<AnalysisResult> & { rawText: string; coverage: AnalysisCoverage }> {
+): Promise<Partial<AnalysisResult> & { rawText: string; coverage: AnalysisCoverage; failures: AnalysisFailures }> {
   const settings = normalizeSettings(settingsInput)
   const documents = coerceDocuments(input)
   if (documents.length === 0 || documents.every(document => !document.fullText.trim())) {
@@ -546,23 +734,19 @@ export async function callAI(
 
   if (documents.length === 1 && totalCharacters <= DIRECT_ANALYSIS_MAX_CHARS) {
     const directCoverage = buildCoverage(allChunks, allChunks, { ...budget, mode: 'complete', maxChunks: allChunks.length })
-    try {
-      const response = await requestValidated({
-        execution,
-        settings,
-        messages: buildAnalysisMessages(settings, sections, documents),
-        maxTokens: settings.maxTokens,
-        temperature: settings.temperature,
-        signal,
-        validate: parsed => normalizeAnalysis(parsed, sections, documents, directCoverage, settings),
-        onRetry: () => onProgress?.({ phase: 'retrying', completed: 0, total: 1, label: 'Checking evidence and retrying once…', ...progressContext }),
-        onProviderEvent,
-      })
-      return { ...response.value, rawText: response.rawText, coverage: directCoverage }
-    } catch (error) {
-      if (isValidationError(error)) throw new FriendlyError(evidenceFailureMessage(error, 'analysis'), 'UNVERIFIED')
-      throw error
-    }
+    onProgress?.({ phase: 'synthesizing', completed: 0, total: 1, label: 'Generating evidence-checked outputs…', ...progressContext })
+    return generateAnalysisSections({
+      execution,
+      settings,
+      sections,
+      documents,
+      coverage: directCoverage,
+      sourceContent: `REFERENCE DOCUMENTS (UNTRUSTED SOURCE DATA)\n${renderDocumentSources(documents)}`,
+      signal,
+      onProgress,
+      onProviderEvent,
+      progressContext: () => progressContext,
+    })
   }
 
   const batches: DocumentChunk[][] = []
@@ -582,7 +766,7 @@ export async function callAI(
         execution,
         settings,
         messages: chunkMapMessages(settings, batch),
-        maxTokens: Math.min(1_600, settings.maxTokens),
+        maxTokens: Math.min(1_600, settings.maxTokens, executionOutputLimit(execution)),
         temperature: Math.min(settings.temperature, 0.3),
         signal,
         validate: parsed => validateChunkBatch(parsed, documents, new Set(batch.map(chunk => chunk.id))),
@@ -592,7 +776,33 @@ export async function callAI(
       cacheDigests(cacheKey, response.value)
       return response.value
     } catch (error) {
-      if (isValidationError(error)) return []
+      if (recoverableGenerationError(error) && batch.length > 1) {
+        const recovered: ChunkDigest[] = []
+        for (const chunk of batch) {
+          const singleKey = digestCacheKey([chunk])
+          const cachedSingle = digestCache.get(singleKey)
+          if (cachedSingle) {
+            recovered.push(...cachedSingle)
+            continue
+          }
+          const response = await requestValidated({
+            execution,
+            settings,
+            messages: chunkMapMessages(settings, [chunk]),
+            maxTokens: Math.min(1_000, settings.maxTokens, executionOutputLimit(execution)),
+            temperature: 0,
+            signal,
+            validate: parsed => validateChunkBatch(parsed, documents, new Set([chunk.id])),
+            onRetry: () => onProgress?.({ phase: 'retrying', completed, total: batches.length, label: 'Recovering one missing source section…', ...progressContext }),
+            onProviderEvent,
+          })
+          cacheDigests(singleKey, response.value)
+          recovered.push(...response.value)
+        }
+        cacheDigests(cacheKey, recovered)
+        return recovered
+      }
+      if (recoverableGenerationError(error)) throw new FriendlyError(evidenceFailureMessage(error, 'notes'), 'UNVERIFIED')
       throw error
     } finally {
       completed += 1
@@ -606,32 +816,23 @@ export async function callAI(
     }
   })
   const digests = mappedBatches.flat()
-  if (digests.length === 0) throw new FriendlyError('The selected model could not produce source-backed notes for the selected documents. Try again, lower the chunk budget, or choose a more capable model.', 'UNVERIFIED')
+  const mappedIds = new Set(digests.map(digest => digest.chunkId))
+  const missingChunkCount = selectedChunks.filter(chunk => !mappedIds.has(chunk.id)).length
+  if (missingChunkCount > 0) throw new FriendlyError(`The selected model could not produce verified notes for ${missingChunkCount} selected source section${missingChunkCount === 1 ? '' : 's'}. No incomplete synthesis was created.`, 'UNVERIFIED')
   onProgress?.({ phase: 'synthesizing', completed: 0, total: 1, label: 'Combining verified evidence…', ...progressContext })
-  try {
-    const response = await requestValidated({
-      execution,
-      settings,
-      messages: [
-        {
-          role: 'system',
-          content: `${finalSystemPrompt(settings, sections)}\nYou are receiving validated chunk digests. Use only their claims and preserve their source IDs and exact excerpts.`,
-        },
-        { role: 'user', content: `VALIDATED CHUNK DIGESTS\n${JSON.stringify(digests)}` },
-      ],
-      maxTokens: settings.maxTokens,
-      temperature: settings.temperature,
-      signal,
-      validate: parsed => normalizeAnalysis(parsed, sections, documents, coverage, settings),
-      onRetry: () => onProgress?.({ phase: 'retrying', completed: 0, total: 1, label: 'Checking evidence and retrying once…', ...progressContext }),
-      onProviderEvent,
-    })
-    onProgress?.({ phase: 'synthesizing', completed: 1, total: 1, label: 'Evidence-checked analysis ready', ...progressContext })
-    return { ...response.value, rawText: response.rawText, coverage }
-  } catch (error) {
-    if (isValidationError(error)) throw new FriendlyError(evidenceFailureMessage(error, 'analysis'), 'UNVERIFIED')
-    throw error
-  }
+  return generateAnalysisSections({
+    execution,
+    settings,
+    sections,
+    documents,
+    coverage,
+    sourceContent: `VALIDATED CHUNK DIGESTS\n${JSON.stringify(digests)}`,
+    extraSystem: 'You are receiving validated chunk digests. Use only their claims and preserve their source IDs and exact excerpts.',
+    signal,
+    onProgress,
+    onProviderEvent,
+    progressContext: () => progressContext,
+  })
 }
 
 const refusalPattern = /(?:not (?:found|mentioned|available)|does not (?:say|mention|contain)|insufficient (?:evidence|information)|cannot determine)/i
@@ -688,7 +889,7 @@ function groqExecution(apiKey: string, model: string): AIExecutionConfig {
     mode: 'manual',
     activeProvider: 'groq',
     priority: ['groq'],
-    providers: { groq: { provider: 'groq', apiKey: key, model, consent: true } },
+    providers: { groq: { provider: 'groq', apiKey: key, model, consent: true, compatibility: 'verified' } },
   }
 }
 

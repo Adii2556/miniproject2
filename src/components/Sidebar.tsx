@@ -7,7 +7,7 @@ import {
 import { SUPPORTED_LANGUAGES, type AnalysisSettings } from '../lib/groq'
 import DocLenseLogo from './DocLenseLogo'
 import ProviderSettings from './ProviderSettings'
-import type { ModelMetadata, ProviderId, ProviderMode, ProviderStatus } from '../lib/aiProviders'
+import type { ModelMetadata, ModelVerificationProgress, ProviderId, ProviderMode, ProviderStatus } from '../lib/aiProviders'
 import type { HistoryEntry } from '../lib/history'
 import type { ProviderKeyPersistence } from '../lib/providerKeyStorage'
 
@@ -30,10 +30,11 @@ interface SidebarProps {
   modelCatalogs: Partial<Record<ProviderId, ModelMetadata[]>>
   providerStatuses: Record<ProviderId, ProviderStatus>
   providerErrors: Partial<Record<ProviderId, string>>
+  providerNotices: Partial<Record<ProviderId, string>>
+  providerProgress: Partial<Record<ProviderId, ModelVerificationProgress>>
   providerConsents: Record<ProviderId, boolean>
   setProviderConsent: (provider: ProviderId, consent: boolean) => void
   onConnectProvider: (provider: ProviderId, refresh?: boolean) => void
-  onTestProvider: (provider: ProviderId) => void
   settings: AnalysisSettings
   updateSettings: (patch: Partial<AnalysisSettings>) => void
   onResetSettings: () => void
@@ -77,7 +78,7 @@ function CollapsibleSection({
         <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg transition-colors ${expanded ? 'bg-gold-dark/15 text-gold-dark' : 'bg-white/5 text-text-dark-soft'}`}>{icon}</span>
         <span className="min-w-0 flex-1">
           <span className={`block text-[10.5px] font-extrabold uppercase tracking-[0.16em] ${expanded ? 'text-text-dark' : 'text-text-dark-soft'}`}>{label}</span>
-          <span className="mt-0.5 block truncate text-[9.5px] font-medium text-text-dark-soft/70">{summary}</span>
+          <span className="mt-0.5 block truncate text-[9.5px] font-medium text-text-dark-soft/80">{summary}</span>
         </span>
         <ChevronDown size={14} className={`shrink-0 text-text-dark-soft transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />
       </button>
@@ -95,8 +96,8 @@ export default function Sidebar(props: SidebarProps) {
     open, onClose, providerMode, setProviderMode, activeProvider, setActiveProvider,
     providerPriority, setProviderPriority, providerKeys, providerKeyPersistence, setProviderKey,
     onSaveProviderKey, onRemoveProviderKey, providerModels,
-    setProviderModel, modelCatalogs, providerStatuses, providerErrors, providerConsents,
-    setProviderConsent, onConnectProvider, onTestProvider,
+    setProviderModel, modelCatalogs, providerStatuses, providerErrors, providerNotices, providerProgress, providerConsents,
+    setProviderConsent, onConnectProvider,
     settings, updateSettings, onResetSettings, history, onClearHistory, onPickHistory, disabled,
   } = props
   const tempPct = ((settings.temperature - 0) / 1.2) * 100
@@ -169,10 +170,11 @@ export default function Sidebar(props: SidebarProps) {
               catalogs={modelCatalogs}
               statuses={providerStatuses}
               errors={providerErrors}
+              notices={providerNotices}
+              progress={providerProgress}
               consents={providerConsents}
               onConsentChange={setProviderConsent}
               onConnect={onConnectProvider}
-              onTest={onTestProvider}
               disabled={disabled}
             />
           </CollapsibleSection>
@@ -390,7 +392,7 @@ export default function Sidebar(props: SidebarProps) {
 
         {/* footer badge */}
         <div className="border-t border-white/10 px-5 py-3">
-          <p className="flex items-center justify-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-dark-soft/60"><Zap size={11} className="text-gold-dark" />Provider-flexible · evidence checked</p>
+          <p className="flex items-center justify-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-dark-soft/80"><Zap size={11} className="text-gold-dark" />Provider-flexible · evidence checked</p>
         </div>
       </aside>
     </>

@@ -70,17 +70,13 @@ export default function Docs() {
 
         <section className="mt-8 rounded-3xl border border-moss/20 bg-cream p-6 dark:border-white/10 dark:bg-panel-dark sm:p-8">
           <h2 className="flex items-center gap-2.5 font-display text-2xl font-bold"><Cpu size={22} className="text-persimmon dark:text-persimmon-dark" />Models</h2>
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[560px] text-left text-sm">
-              <thead><tr className="border-b-2 border-moss/25 text-xs uppercase tracking-wider text-ink-soft dark:text-text-dark-soft"><th className="py-2 pr-4">Model ID</th><th className="py-2 pr-4">Suggested use</th><th className="py-2">Note</th></tr></thead>
-              <tbody className="font-mono text-[12.5px]">
-                {[['llama-3.3-70b-versatile', 'Complex evidence synthesis (default)', 'Availability and limits are set by Groq'], ['llama-3.1-8b-instant', 'Short documents and faster iteration', 'Re-check difficult citations'], ['openai/gpt-oss-120b', 'Large open-weight analysis', 'Model behavior can vary'], ['openai/gpt-oss-20b', 'Compact open-weight analysis', 'Prefer for lower-cost drafts']].map(r => (
-                  <tr key={r[0]} className="border-b border-moss/10 dark:border-white/5"><td className="py-2.5 pr-4 font-semibold text-moss-deep dark:text-gold-dark">{r[0]}</td><td className="py-2.5 pr-4 font-sans">{r[1]}</td><td className="py-2.5">{r[2]}</td></tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="mt-4 flex items-start gap-2 text-xs leading-relaxed text-ink-soft dark:text-text-dark-soft"><Terminal size={14} className="mt-0.5 shrink-0" />Endpoint: <code className="rounded bg-moss-mist px-1.5 py-0.5 font-mono dark:bg-white/10">https://api.groq.com/openai/v1/chat/completions</code> — OpenAI-compatible, JSON mode enabled via <code className="rounded bg-moss-mist px-1.5 py-0.5 font-mono dark:bg-white/10">response_format: json_object</code>.</p>
+          <p className="mt-4 max-w-3xl text-sm leading-relaxed text-ink-soft dark:text-text-dark-soft">DocLense discovers models from the official Groq, NVIDIA NIM, DeepSeek, or OpenAI catalog for your API key. It then sends a small live request that checks the same chat, JSON, citation, and quiz shape used by analysis. Only models that pass appear in the selector.</p>
+          <ul className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
+            <li className="rounded-2xl border border-moss/15 bg-paper-deep p-4 dark:border-white/10 dark:bg-white/[0.03]"><strong className="block text-moss-deep dark:text-gold-dark">Account-specific</strong><span className="mt-1 block text-xs leading-relaxed text-ink-soft dark:text-text-dark-soft">Restricted or inaccessible IDs never appear.</span></li>
+            <li className="rounded-2xl border border-moss/15 bg-paper-deep p-4 dark:border-white/10 dark:bg-white/[0.03]"><strong className="block text-moss-deep dark:text-gold-dark">Live verified</strong><span className="mt-1 block text-xs leading-relaxed text-ink-soft dark:text-text-dark-soft">Discovery metadata alone is not treated as proof.</span></li>
+            <li className="rounded-2xl border border-moss/15 bg-paper-deep p-4 dark:border-white/10 dark:bg-white/[0.03]"><strong className="block text-moss-deep dark:text-gold-dark">Key-scoped cache</strong><span className="mt-1 block text-xs leading-relaxed text-ink-soft dark:text-text-dark-soft">Verified results expire and never store the API key.</span></li>
+          </ul>
+          <p className="mt-4 flex items-start gap-2 text-xs leading-relaxed text-ink-soft dark:text-text-dark-soft"><Terminal size={14} className="mt-0.5 shrink-0" />Availability comes from each provider’s official <code className="rounded bg-moss-mist px-1.5 py-0.5 font-mono dark:bg-white/10">/v1/models</code> and <code className="rounded bg-moss-mist px-1.5 py-0.5 font-mono dark:bg-white/10">/v1/chat/completions</code> endpoints.</p>
         </section>
 
         <div className="mt-12 text-center">

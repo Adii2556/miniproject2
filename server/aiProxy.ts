@@ -84,7 +84,7 @@ function classifyError(status: number, value: unknown): string {
   if (status === 429) return /(?:quota|billing|credit|balance)/.test(text) ? 'quota' : 'rate_limit'
   if ((status === 400 || status === 422) && /(?:failed_generation|json_validate_failed|failed to generate json|generated json does not match)/.test(text)) return 'output'
   if (status === 408 || status === 409 || status === 425 || status >= 500) return 'temporary'
-  if (status === 413) return 'context'
+  if (status === 413 || ((status === 400 || status === 422) && /(?:context.{0,30}(?:length|window|limit)|maximum context|too many (?:input )?tokens|token limit|prompt is too long)/.test(text))) return 'context'
   if (status === 404 || status === 410 || /model.{0,40}(?:not found|does not exist|unsupported|unavailable|deprecated)/.test(text)) return 'model'
   return 'request'
 }
@@ -158,7 +158,7 @@ function validateChatPayload(provider: ProviderId, value: unknown): ChatPayload 
   if (topP !== undefined && (typeof topP !== 'number' || !Number.isFinite(topP) || topP <= 0 || topP > 1)) return null
   if (value.response_format !== undefined && (!isPlainRecord(value.response_format) || !hasOnlyKeys(value.response_format, ['type']) || value.response_format.type !== 'json_object')) return null
   if (value.reasoning_format !== undefined && (provider !== 'groq' || value.reasoning_format !== 'hidden')) return null
-  if (value.reasoning_effort !== undefined && ((provider !== 'groq' && provider !== 'nvidia') || value.reasoning_effort !== 'low')) return null
+  if (value.reasoning_effort !== undefined && ((provider !== 'groq' && provider !== 'nvidia' && provider !== 'openai') || value.reasoning_effort !== 'low')) return null
 
   return {
     model,

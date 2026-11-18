@@ -37,7 +37,7 @@ export default function Home() {
           <div className="md:col-span-7">
             <motion.div {...fadeUp} transition={{ duration: 0.55 }} className="inline-flex items-center gap-2 rounded-full border border-moss/25 bg-cream px-3.5 py-1.5 shadow-sm dark:border-white/10 dark:bg-panel-dark">
               <span className="flex h-2 w-2"><span className="absolute inline-flex h-2 w-2 animate-ping rounded-full bg-persimmon opacity-70" /><span className="relative inline-flex h-2 w-2 rounded-full bg-persimmon" /></span>
-              <span className="text-xs font-semibold tracking-wide text-moss-deep dark:text-text-dark-soft">Powered by Groq · llama-3.3-70b-versatile</span>
+              <span className="text-xs font-semibold tracking-wide text-moss-deep dark:text-text-dark-soft">Verified models from your AI provider</span>
             </motion.div>
 
             <motion.h1 {...fadeUp} transition={{ duration: 0.6, delay: 0.08 }} className="mt-5 font-display text-[2.65rem] font-extrabold leading-[1.04] tracking-tight text-ink dark:text-text-dark sm:text-6xl xl:text-[4.3rem]">

@@ -26,6 +26,23 @@ const valid = {
   },
 }
 
+const cited = (text = 'Verified evidence establishes the central finding.') => ({
+  text,
+  citations: [{ sourceId, excerpt: 'Verified evidence establishes the central finding.' }],
+})
+
+const keyPoints = Array.from({ length: 5 }, (_, index) => cited(`Verified evidence establishes the central finding. Point ${index + 1}.`))
+const keywords = ['verified', 'evidence', 'central', 'finding', 'source', 'analysis', 'result', 'support']
+const sentiment = { label: 'Neutral', score: 0, confidence: 90, summary: 'The source is factual.', tones: ['factual', 'measured'] }
+const quizQuestion = (index: number) => ({
+  question: `What does the verified evidence establish in item ${index + 1}?`,
+  options: ['The central finding', 'An unrelated claim', 'No finding', 'A contradiction'],
+  answer: 0,
+  explanation: 'Verified evidence establishes the central finding.',
+  difficulty: 'easy',
+  citations: [{ sourceId, excerpt: 'Verified evidence establishes the central finding.' }],
+})
+
 const response = (content: string | object, status = 200) => new Response(
   status === 200
     ? JSON.stringify({ choices: [{ message: { content: typeof content === 'string' ? content : JSON.stringify(content) } }] })
@@ -50,17 +67,9 @@ describe('Groq schema, evidence, and retry policy', () => {
   })
 
   test('repairs a quiz until it contains the selected number of verified questions', async () => {
-    const question = (index: number) => ({
-      question: `What does the verified evidence establish in item ${index + 1}?`,
-      options: ['The central finding', 'An unrelated claim', 'No finding', 'A contradiction'],
-      answer: 0,
-      explanation: 'Verified evidence establishes the central finding.',
-      difficulty: 'easy',
-      citations: [{ sourceId, excerpt: 'Verified evidence establishes the central finding.' }],
-    })
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(response({ quiz: Array.from({ length: 4 }, (_, index) => question(index)) }))
-      .mockResolvedValueOnce(response({ quiz: Array.from({ length: 5 }, (_, index) => question(index)) }))
+      .mockResolvedValueOnce(response({ quiz: Array.from({ length: 4 }, (_, index) => quizQuestion(index)) }))
+      .mockResolvedValueOnce(response({ quiz: Array.from({ length: 5 }, (_, index) => quizQuestion(index)) }))
     vi.stubGlobal('fetch', fetchMock)
 
     const result = await callGroq('gsk_test', settings, ['quiz'], document)
@@ -113,6 +122,139 @@ describe('Groq schema, evidence, and retry policy', () => {
   test('rejects two unsupported responses without rendering claims', async () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(response({ ...valid, summary: { text: 'Fabricated claim.', citations: [{ sourceId, excerpt: 'not present' }] } }))))
     await expect(callGroq('gsk_test', settings, ['summary'], document)).rejects.toMatchObject({ code: 'UNVERIFIED' })
+  })
+
+  test('preserves valid sections and targets only a missing summary field', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ oneLiner: valid.oneLiner, summary: valid.summary, keyPoints }))
+      .mockResolvedValueOnce(response(valid))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await callGroq('gsk_test', { ...settings, maxTokens: 3_072 }, ['summary', 'keyPoints'], document)
+
+    expect(result.summary?.evidenceStatus).toBe('verified')
+    expect(result.keyPoints).toHaveLength(5)
+    expect(result.failures).toEqual({})
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const retryBody = JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body)) as { payload: { messages: Array<{ content: string }> } }
+    expect(retryBody.payload.messages[0].content).toContain('title, oneLiner, summary')
+    expect(retryBody.payload.messages[0].content).not.toContain('top-level keys and no others: keyPoints')
+  })
+
+  test('returns verified partial results with an exact failed-section reason', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ ...valid, sentiment: { label: 'Neutral' } }))
+      .mockImplementation(() => Promise.resolve(response({ sentiment: { label: 'Neutral' } })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await callGroq('gsk_test', { ...settings, maxTokens: 3_072 }, ['summary', 'sentiment'], document)
+
+    expect(result.summary?.evidenceStatus).toBe('verified')
+    expect(result.sentiment).toBeUndefined()
+    expect(result.failures.sentiment).toMatch(/score|confidence|summary|tones/)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  test('detects a non-empty response truncated by finish_reason and performs one bounded repair', async () => {
+    const truncated = new Response(JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: '{"title":"cut off"' } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    const fetchMock = vi.fn().mockResolvedValueOnce(truncated).mockResolvedValueOnce(response(valid))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await callGroq('gsk_test', settings, ['summary'], document)
+
+    expect(result.summary?.evidenceStatus).toBe('verified')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const repairBody = JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body)) as { payload: { temperature: number; messages: Array<{ content: string }> } }
+    expect(repairBody.payload.temperature).toBe(0)
+    expect(repairBody.payload.messages.at(-1)?.content).toContain('used the output budget')
+  })
+
+  test.each([5, 10, 15] as const)('generates %s quiz questions in bounded five-question batches', async quizQuestions => {
+    let offset = 0
+    const fetchMock = vi.fn().mockImplementation(() => {
+      const quiz = Array.from({ length: 5 }, (_, index) => quizQuestion(offset + index))
+      offset += 5
+      return Promise.resolve(response({ quiz }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await callGroq('gsk_test', { ...settings, maxTokens: 3_072, quizQuestions }, ['quiz'], document)
+
+    expect(result.quiz).toHaveLength(quizQuestions)
+    expect(new Set(result.quiz?.map(question => question.question)).size).toBe(quizQuestions)
+    expect(fetchMock).toHaveBeenCalledTimes(quizQuestions / 5)
+    for (const call of fetchMock.mock.calls) {
+      const body = JSON.parse(String((call[1] as RequestInit).body)) as { payload: { max_completion_tokens: number } }
+      expect(body.payload.max_completion_tokens).toBeLessThanOrEqual(1_360)
+    }
+  })
+
+  test('validates all five output types when requested together', async () => {
+    let quizOffset = 0
+    const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { payload: { messages: Array<{ content: string }> } }
+      if (body.payload.messages[0].content.includes('top-level keys and no others: quiz')) {
+        const quiz = Array.from({ length: 5 }, (_, index) => quizQuestion(quizOffset + index))
+        quizOffset += 5
+        return Promise.resolve(response({ quiz }))
+      }
+      return Promise.resolve(response({ ...valid, keyPoints, keywords, sentiment }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await callGroq('gsk_test', { ...settings, maxTokens: 3_072 }, ['summary', 'keyPoints', 'keywords', 'sentiment', 'quiz'], document)
+
+    expect(result).toMatchObject({ title: valid.title, keywords, sentiment })
+    expect(result.keyPoints).toHaveLength(5)
+    expect(result.quiz).toHaveLength(5)
+    expect(result.failures).toEqual({})
+  })
+
+  test.each([
+    ['keyPoints', { keyPoints }, 'keyPoints'],
+    ['keywords', { keywords }, 'keywords'],
+    ['sentiment', { sentiment }, 'sentiment'],
+  ] as const)('validates the %s output independently', async (section, payload, resultKey) => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(response(payload))))
+    const result = await callGroq('gsk_test', { ...settings, maxTokens: 3_072 }, [section], document)
+    expect(result[resultKey]).toBeDefined()
+    expect(result.failures).toEqual({})
+  })
+
+  test('recovers a missing paired chunk individually before synthesis', async () => {
+    const large = createTextDocument(`Verified evidence establishes the central finding. ${'context '.repeat(4_000)}`, 'chunk-recovery.txt')
+    const largeSourceId = large.blocks[0].id
+    let pairedAttempts = 0
+    const digestFor = (chunkId: string) => ({
+      chunkId,
+      overview: 'The source contains verified evidence.',
+      claims: [{ text: 'Verified evidence establishes the central finding.', citations: [{ sourceId: largeSourceId, excerpt: 'Verified evidence establishes the central finding.' }] }],
+      keywords: ['verified evidence'],
+    })
+    const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      const wrapper = JSON.parse(String(init.body)) as { payload: { messages: Array<{ content: string }> } }
+      const system = wrapper.payload.messages[0].content
+      if (!system.includes('compact evidence notes')) {
+        return Promise.resolve(response({
+          title: 'Recovered finding',
+          oneLiner: 'Every selected chunk was checked.',
+          summary: { text: 'Verified evidence establishes the central finding.', citations: [{ sourceId: largeSourceId, excerpt: 'Verified evidence establishes the central finding.' }] },
+        }))
+      }
+      const chunkIds = [...wrapper.payload.messages[1].content.matchAll(/"chunkId":"([^"]+)"/g)].map(match => match[1])
+      if (chunkIds.length > 1) {
+        pairedAttempts += 1
+        return Promise.resolve(response({ digests: [digestFor(chunkIds[0])] }))
+      }
+      return Promise.resolve(response({ digests: chunkIds.map(digestFor) }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await callGroq('gsk_test', { ...settings, analysisMode: 'sampled', maxChunks: 2, maxTokens: 3_072 }, ['summary'], large)
+
+    expect(pairedAttempts).toBe(2)
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+    expect(result.summary?.evidenceStatus).toBe('verified')
   })
 
   test.each([[401, 'AUTH', 1], [429, 'RATE_LIMIT', 3], [503, 'SERVER', 3]] as const)('maps HTTP %s with the bounded retry policy', async (status, code, calls) => {
