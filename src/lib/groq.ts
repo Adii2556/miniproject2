@@ -27,7 +27,6 @@ import {
 } from './aiProviders'
 import { serializeUntrustedDocument } from './documentSecurity'
 
-const REQUEST_TIMEOUT_MS = 135_000
 const MAX_QUESTION_CHARS = 2_000
 const MAX_HISTORY_MESSAGE_CHARS = 4_000
 
@@ -247,20 +246,6 @@ function validateApiKey(apiKey: string): string {
   return key
 }
 
-function createRequestSignal(parent?: AbortSignal): { signal: AbortSignal; cleanup: () => void } {
-  const controller = new AbortController()
-  const timeout = globalThis.setTimeout(() => controller.abort(new DOMException('Request timed out', 'TimeoutError')), REQUEST_TIMEOUT_MS)
-  const abortFromParent = () => controller.abort(parent?.reason)
-  parent?.addEventListener('abort', abortFromParent, { once: true })
-  return {
-    signal: controller.signal,
-    cleanup: () => {
-      globalThis.clearTimeout(timeout)
-      parent?.removeEventListener('abort', abortFromParent)
-    },
-  }
-}
-
 function parseJsonLoose(content: string): unknown {
   const cleaned = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim()
   try {
@@ -281,19 +266,13 @@ function validationSummary(error: unknown): string {
 }
 
 async function postAI(execution: AIExecutionConfig, messages: GroqMessage[], maxTokens: number, temperature: number, signal?: AbortSignal, onProviderEvent?: (event: ProviderEvent) => void): Promise<string> {
-  const request = createRequestSignal(signal)
   try {
-    try {
-      const response = await runProviderCompletion(execution, messages, { maxTokens, temperature, signal: request.signal, onEvent: onProviderEvent })
-      return response.content
-    } catch (error) {
-      if (signal?.aborted || (error as Error).name === 'AbortError') throw error
-      if (request.signal.aborted) throw new FriendlyError('The AI provider took too long to respond. Try again or use sampled mode.', 'NETWORK')
-      const detail = providerErrorDetails(error)
-      throw new FriendlyError(detail.message, detail.code)
-    }
-  } finally {
-    request.cleanup()
+    const response = await runProviderCompletion(execution, messages, { maxTokens, temperature, signal, onEvent: onProviderEvent })
+    return response.content
+  } catch (error) {
+    if (signal?.aborted || (error as Error).name === 'AbortError') throw error
+    const detail = providerErrorDetails(error)
+    throw new FriendlyError(detail.message, detail.code)
   }
 }
 

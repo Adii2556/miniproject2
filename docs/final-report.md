@@ -4,7 +4,7 @@ Date: 9 November 2026
 
 ## Assessment
 
-Against the inspected source baselines, DocLense now surpasses MiniProject1 in complete-document budgeting, multi-document work, retrieval ranking, evidence-status disclosure, OCR, export formats, cancellation/timeouts, and integrated security/testing. It retains the reference application's valuable citation-reader and schema-validation ideas while preserving DocLense's stronger abort-aware parsing and memory-only secret/history behavior.
+Against the inspected source baselines, DocLense now surpasses MiniProject1 in complete-document budgeting, multi-document work, retrieval ranking, evidence-status disclosure, OCR, export formats, cancellation/timeouts, and integrated security/testing. It retains the reference application's valuable citation-reader and schema-validation ideas while preserving DocLense's stronger abort-aware parsing, memory-only default for secrets, and memory-only history behavior.
 
 This is not a claim of universal model superiority. Live factual accuracy, latency, token use, and cost were not scored because no credential and controlled fixture corpus were supplied. The fair protocol is in `docs/benchmark.md`.
 
@@ -28,7 +28,7 @@ This is not a claim of universal model superiority. Live factual accuracy, laten
 - Canonical document/source/chunk/citation types are separated from AI orchestration, extraction/OCR, UI, and report generation.
 - Heavy PDF parsing, OCR, and jsPDF paths are dynamically loaded. Long reader sections use `content-visibility`.
 - Groq requests use a 45-second timeout, independent cancellation, two-request map concurrency, omitted browser credentials/referrer, and fixed provider error messages.
-- Keys, documents, analyses, and chat stay in tab memory. The UI explicitly discloses that selected context and the BYOK credential are transmitted to Groq.
+- Keys stay in tab memory unless the user explicitly opts into browser-local saving; documents, analyses, and chat remain tab-memory only. The UI discloses both the local-storage risk and that selected context and the BYOK credential are transmitted to the chosen provider.
 - CSP/COOP/CORP/HSTS/nosniff/frame/referrer/permissions headers are configured. OCR worker/model/core assets are same-origin.
 - The complete findings, evidence, remediation, and remaining risk are in `docs/security-findings.md`. No vulnerability-free claim is made.
 

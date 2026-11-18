@@ -4,7 +4,7 @@ Status reflects this source tree and the verification commands recorded in the f
 
 | ID | Severity | Finding and source evidence | Remediation | Verification | Remaining risk |
 |---|---|---|---|---|---|
-| SEC-01 | High | A shared frontend key would be extractable from the bundle. | No shared key exists; BYOK value remains React state and regression checks reject storage/environment patterns. | Storage unit/browser tests and bundle scan. | XSS-capable extensions or a compromised origin can observe tab memory. |
+| SEC-01 | High | A shared frontend key would be extractable from the bundle. | No shared key exists; BYOK values remain React state by default, and only an explicit Save action writes the selected key to the designated browser-local store. Regression checks reject environment exposure and unintended storage paths. | Storage unit/browser tests and bundle scan. | XSS-capable extensions or a compromised origin can observe memory and any explicitly saved local key. |
 | SEC-02 | High | Long-document prefix truncation could create confidently incomplete output. | Source-preserving chunks, explicit complete/sampled coverage, hard complete-mode refusal, and full-workspace Q&A retrieval. | Document pipeline and mocked browser tests. | Sampled mode is deliberately incomplete and visibly labeled. |
 | SEC-03 | High | Malicious document instructions can attempt indirect prompt injection. | Delimited untrusted-data prompts, instruction-like-content warning, schema validation, exact source checks. | Prompt-boundary/security regression tests. | No prompt can guarantee immunity; users must inspect evidence. |
 | SEC-04 | Medium | Model-provided citations could quote nonexistent or irrelevant text. | Exact excerpt lookup plus claim/evidence lexical support score; invalid citations removed and weak support marked uncertain. | Citation tamper/support unit tests. | Lexical overlap is not semantic entailment. |
@@ -19,7 +19,7 @@ Status reflects this source tree and the verification commands recorded in the f
 ## Release blockers
 
 - Any critical/high production audit issue.
-- A bundled or persisted API key/document body.
+- A bundled key, a document body in persistent storage, or an API key persisted anywhere except the explicit user-controlled browser-local key store.
 - Citation navigation that resolves to a different source, or complete mode that silently omits chunks.
 - Failure of lint, strict TypeScript build, unit/security tests, or the primary desktop/mobile browser flow.
 

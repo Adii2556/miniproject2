@@ -53,7 +53,7 @@ export default function Docs() {
               <li>Open <b>API Keys</b> → <b>Create API Key</b>.</li>
               <li>Paste it into the Studio sidebar when you are ready to analyze a document.</li>
             </ol>
-            <p className="mt-3 rounded-xl border border-gold/40 bg-[#fdf6dd] px-3 py-2 text-xs font-semibold text-[#7a5410] dark:border-gold-dark/25 dark:bg-gold-dark/10 dark:text-gold-dark">Your key stays in this tab's memory and is sent only to api.groq.com. Reloading or closing the tab clears it.</p>
+            <p className="mt-3 rounded-xl border border-gold/40 bg-[#fdf6dd] px-3 py-2 text-xs font-semibold text-[#7a5410] dark:border-gold-dark/25 dark:bg-gold-dark/10 dark:text-gold-dark">Your key stays in this tab's memory unless you explicitly select Save. Saved keys remain in this browser until removed. Browser-local storage is not fully secure, so do not save a key on a shared device.</p>
           </div>
           <div className="rounded-3xl border border-moss/20 bg-cream p-6 dark:border-white/10 dark:bg-panel-dark">
             <h2 className="flex items-center gap-2.5 font-display text-xl font-bold"><UploadCloud size={20} className="text-persimmon dark:text-persimmon-dark" />Use it</h2>

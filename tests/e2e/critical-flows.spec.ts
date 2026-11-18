@@ -2,6 +2,13 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 
 const PROVIDER_URL = '**/api/ai'
+const SAVED_KEYS_STORAGE = 'doclense.saved-provider-keys.v1'
+
+async function openProviderSettings(page: Page) {
+  if ((page.viewportSize()?.width ?? 1280) >= 1024) return
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await expect(page.getByRole('complementary', { name: 'Analysis settings' })).toBeInViewport()
+}
 
 async function fulfillProvider(route: Route, content: unknown) {
   const request = route.request().postDataJSON() as { action?: string }
@@ -16,14 +23,45 @@ async function fulfillProvider(route: Route, content: unknown) {
 async function addKey(page: Page) {
   const input = page.locator('#groq-key')
   await input.waitFor({ state: 'attached' })
-  const openSettings = page.getByRole('button', { name: 'Open settings' })
-  if (await openSettings.isVisible()) await openSettings.click()
+  await openProviderSettings(page)
   await input.fill('browser-test-key')
   await page.locator('label').filter({ hasText: 'Allow API usage' }).locator('input[type="checkbox"]').check()
   if (await page.getByRole('button', { name: 'Close settings' }).isVisible()) await page.keyboard.press('Escape')
 }
 
 test.describe('evidence-first workspace', () => {
+  test('saves, restores, updates, and removes an API key only on explicit request', async ({ page }) => {
+    await page.goto('/#/app')
+    await openProviderSettings(page)
+
+    const input = page.locator('#groq-key')
+    await expect(input).toHaveAttribute('type', 'password')
+    await input.fill('gsk-browser-saved-one')
+    expect(await page.evaluate(key => localStorage.getItem(key), SAVED_KEYS_STORAGE)).toBeNull()
+
+    await page.getByRole('button', { name: 'Save Groq API key in this browser' }).click()
+    await expect(page.getByText('Saved in this browser', { exact: true })).toBeVisible()
+    expect(await page.evaluate(key => localStorage.getItem(key), SAVED_KEYS_STORAGE)).toContain('gsk-browser-saved-one')
+
+    await page.reload()
+    await openProviderSettings(page)
+    await expect(input).toHaveValue('gsk-browser-saved-one')
+    await expect(input).toHaveAttribute('type', 'password')
+    await expect(page.getByText('Browser-local storage is not fully secure. Do not save keys on a shared device.')).toBeVisible()
+
+    await input.fill('gsk-browser-saved-two')
+    await expect(page.getByText('Saved copy differs · update to keep changes')).toBeVisible()
+    await page.getByRole('button', { name: 'Update Groq API key in this browser' }).click()
+    const updated = await page.evaluate(key => localStorage.getItem(key), SAVED_KEYS_STORAGE)
+    expect(updated).toContain('gsk-browser-saved-two')
+    expect(updated).not.toContain('gsk-browser-saved-one')
+
+    await page.getByRole('button', { name: 'Remove Groq API key from this browser' }).click()
+    await expect(input).toHaveValue('')
+    await expect(page.getByText('Memory-only · cleared on reload')).toBeVisible()
+    expect(await page.evaluate(key => localStorage.getItem(key), SAVED_KEYS_STORAGE)).toBeNull()
+  })
+
   test('uploads, analyzes, opens exact evidence, and keeps secrets out of storage', async ({ page }) => {
     await page.route(PROVIDER_URL, route => fulfillProvider(route, {
       title: 'Evidence-backed result',

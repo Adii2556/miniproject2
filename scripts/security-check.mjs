@@ -14,8 +14,15 @@ assertAbsent(indexHtml, /connect-src[^;]*https:\/\/(?:api\.(?:groq|openai|deepse
 assertAbsent(read('vite.config.ts'), /loadEnv|envPrefix|VITE_GROQ_API_KEY/, 'Vite config exposes environment variables to the client.')
 
 const appSource = read('src/pages/AppShell.tsx') + read('src/components/Sidebar.tsx')
-assertAbsent(appSource, /localStorage\.(?:getItem|setItem)\([^)]*(?:groq|history)/i, 'Application code persists API keys or document history.')
+assertAbsent(appSource, /localStorage\.(?:getItem|setItem)\([^)]*(?:groq|history)/i, 'Application code persists API keys outside the designated key store or persists document history.')
 assertAbsent(appSource, /dangerouslySetInnerHTML/i, 'Application renders untrusted HTML.')
+
+const keyStorageSource = read('src/lib/providerKeyStorage.ts')
+const providerSettingsSource = read('src/components/ProviderSettings.tsx')
+assertPresent(keyStorageSource, /const STORAGE_KEY = 'doclense\.saved-provider-keys\.v1'/, 'Saved provider keys do not use the designated browser-local storage key.')
+assertAbsent(keyStorageSource, /(?:fetch|console\.|location\.|history\.)/i, 'Provider key persistence may transmit, log, or place a key in browser navigation state.')
+assertPresent(providerSettingsSource, /type=\{reveal\[activeProvider\] \? 'text' : 'password'\}/, 'API keys are not masked by default.')
+assertPresent(providerSettingsSource, /Browser-local storage is not fully secure\. Do not save keys on a shared device\./, 'Saved-key risk warning is missing.')
 
 const ocrSource = read('src/lib/ocr.ts')
 assertAbsent(ocrSource, /https?:\/\//i, 'OCR runtime loads an unexpected external resource.')

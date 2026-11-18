@@ -65,7 +65,7 @@ export default function Home() {
             </motion.div>
 
             <motion.div {...fadeUp} transition={{ duration: 0.6, delay: 0.32 }} className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs font-semibold text-ink-soft dark:text-text-dark-soft">
-              {['No DocLense account', 'Local document extraction', 'Key held in tab memory'].map(t => (
+              {['No DocLense account', 'Local document extraction', 'Unsaved keys stay in tab memory'].map(t => (
                 <span key={t} className="inline-flex items-center gap-1.5"><BadgeCheck size={14} className="text-moss dark:text-persimmon-dark" />{t}</span>
               ))}
             </motion.div>
@@ -114,7 +114,7 @@ export default function Home() {
         {/* stat strip */}
         <div className="relative border-y border-moss/15 bg-moss-deep text-cream dark:border-white/10 dark:bg-panel-dark">
           <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-center gap-x-10 gap-y-2 px-4 py-3 text-center sm:justify-between sm:px-6">
-            {[['Exact', 'source excerpts'], ['2', 'coverage modes'], ['3', 'export formats'], ['0', 'stored API keys']].map(([n, d]) => (
+            {[['Exact', 'source excerpts'], ['2', 'coverage modes'], ['3', 'export formats'], ['Opt-in', 'browser key saving']].map(([n, d]) => (
               <div key={n} className="flex items-baseline gap-2"><span className="font-display text-xl font-extrabold text-gold-dark">{n}</span><span className="text-[11px] font-semibold uppercase tracking-wider text-cream/80">{d}</span></div>
             ))}
           </div>
@@ -175,14 +175,14 @@ export default function Home() {
             <div className="md:col-span-8">
               <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold uppercase tracking-widest text-gold-dark"><ShieldCheck size={14} /> Explicit data boundaries</div>
               <h2 className="mt-4 font-display text-3xl font-extrabold leading-tight md:text-4xl">Local extraction.<br />Direct, disclosed AI requests.</h2>
-              <p className="mt-4 max-w-2xl font-body text-lg leading-relaxed text-cream/85">PDF parsing, OCR, statistics, citation matching, and history stay in this tab. When you generate or ask a question, bounded document excerpts and your API key go directly to Groq. DocLense has no backend or database.</p>
+              <p className="mt-4 max-w-2xl font-body text-lg leading-relaxed text-cream/85">PDF parsing, OCR, statistics, citation matching, and history stay in this tab. When you generate or ask a question, bounded document excerpts and your API key pass through the transient gateway only to your chosen provider. DocLense has no database.</p>
             </div>
             <div className="md:col-span-4">
               <div className="rounded-2xl border border-white/15 bg-black/20 p-5 font-mono text-[12px] leading-6 text-gold-dark/95">
                 <p className="text-cream/60"># the entire data flow</p>
                 <p><span className="text-cream/80">you.pdf</span> → <span className="text-[#8fe3cf]">pdf.js</span></p>
                 <p>localhost <span className="text-cream/60">{'→'}</span> api.groq.com</p>
-                <p><span className="text-[#8fe3cf]">your key</span> <span className="text-cream/60">→ tab memory only</span></p>
+                <p><span className="text-[#8fe3cf]">your key</span> <span className="text-cream/60">→ memory or opt-in browser save</span></p>
                 <p><span className="text-cream/80">no backend · no DB · no session recording</span></p>
               </div>
             </div>

@@ -39,6 +39,13 @@ import { buildDownloadText, downloadTextFile, type GeneratedMap } from '../lib/a
 import { inspectDocumentSafety } from '../lib/documentSecurity'
 import { createTextDocument, stableDocumentId, type Citation, type DocumentModel } from '../lib/document'
 import type { OcrProgress } from '../lib/ocr'
+import {
+  loadSavedProviderKeys,
+  removeSavedProviderKey,
+  saveProviderKey,
+  type ProviderKeyPersistence,
+  type SavedProviderKeys,
+} from '../lib/providerKeyStorage'
 
 const LS_SETTINGS = 'doclense.settings.v1'
 const LS_PROVIDER_SETTINGS = 'doclense.providers.v1'
@@ -162,7 +169,9 @@ export default function AppShell() {
   const [providerMode, setProviderMode] = useState<ProviderMode>(initialProviders.mode)
   const [activeProvider, setActiveProvider] = useState<ProviderId>(initialProviders.activeProvider)
   const [providerPriority, setProviderPriority] = useState<ProviderId[]>(initialProviders.priority)
-  const [providerKeys, setProviderKeys] = useState<Record<ProviderId, string>>(EMPTY_PROVIDER_KEYS)
+  const initialSavedProviderKeys = useMemo(() => loadSavedProviderKeys(), [])
+  const [providerKeys, setProviderKeys] = useState<Record<ProviderId, string>>({ ...EMPTY_PROVIDER_KEYS, ...initialSavedProviderKeys })
+  const [savedProviderKeys, setSavedProviderKeys] = useState<SavedProviderKeys>(initialSavedProviderKeys)
   const [providerModels, setProviderModels] = useState<Record<ProviderId, string>>(initialProviders.models)
   const [providerConsents, setProviderConsents] = useState<Record<ProviderId, boolean>>(EMPTY_PROVIDER_CONSENTS)
   const [providerStatuses, setProviderStatuses] = useState<Record<ProviderId, ProviderStatus>>(EMPTY_PROVIDER_STATUS)
@@ -201,6 +210,12 @@ export default function AppShell() {
     return Boolean(providerKeys[provider].trim() && providerModels[provider].trim() && providerConsents[provider] && compatibility !== 'incompatible')
   }, [modelCatalogs, providerConsents, providerKeys, providerModels])
   const activeReady = providerMode === 'manual' ? providerIsReady(activeProvider) : providerPriority.some(providerIsReady)
+  const providerKeyPersistence = useMemo(() => Object.fromEntries(DEFAULT_PROVIDER_ORDER.map(provider => {
+    const saved = savedProviderKeys[provider]
+    const current = providerKeys[provider].trim()
+    const persistence: ProviderKeyPersistence = !saved ? 'unsaved' : current === saved ? 'saved' : 'changed'
+    return [provider, persistence]
+  })) as Record<ProviderId, ProviderKeyPersistence>, [providerKeys, savedProviderKeys])
 
   // ---------- document state ----------
   const [uploaded, setUploaded] = useState<UploadedDoc | null>(null)
@@ -250,6 +265,37 @@ export default function AppShell() {
     setToasts(t => [...t.slice(-2), { id, message, tone }])
     window.setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3600)
   }, [])
+
+  const persistProviderKey = useCallback((provider: ProviderId) => {
+    const updating = Boolean(savedProviderKeys[provider])
+    try {
+      const next = saveProviderKey(provider, providerKeys[provider])
+      const savedKey = next[provider] ?? ''
+      setSavedProviderKeys(next)
+      setProviderKeys(current => ({ ...current, [provider]: savedKey }))
+      setProviderErrors(current => ({ ...current, [provider]: undefined }))
+      pushToast(`${providerDefinition(provider).label} API key ${updating ? 'updated' : 'saved'} in this browser`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not save this API key in the browser.'
+      setProviderErrors(current => ({ ...current, [provider]: message }))
+      pushToast(message, 'error')
+    }
+  }, [providerKeys, pushToast, savedProviderKeys])
+
+  const deleteProviderKey = useCallback((provider: ProviderId) => {
+    try {
+      const next = removeSavedProviderKey(provider)
+      setSavedProviderKeys(next)
+      setProviderKeys(current => ({ ...current, [provider]: '' }))
+      setProviderStatuses(current => ({ ...current, [provider]: 'idle' }))
+      setProviderErrors(current => ({ ...current, [provider]: undefined }))
+      pushToast(`${providerDefinition(provider).label} API key removed from this browser`)
+    } catch {
+      const message = 'Could not remove this API key from the browser.'
+      setProviderErrors(current => ({ ...current, [provider]: message }))
+      pushToast(message, 'error')
+    }
+  }, [pushToast])
 
   const connectProvider = useCallback(async (provider: ProviderId, refresh = false) => {
     const key = providerKeys[provider].trim()
@@ -704,11 +750,14 @@ export default function AppShell() {
         providerPriority={providerPriority}
         setProviderPriority={setProviderPriority}
         providerKeys={providerKeys}
+        providerKeyPersistence={providerKeyPersistence}
         setProviderKey={(provider, key) => {
           setProviderKeys(current => ({ ...current, [provider]: key }))
           setProviderStatuses(current => ({ ...current, [provider]: 'idle' }))
           setProviderErrors(current => ({ ...current, [provider]: undefined }))
         }}
+        onSaveProviderKey={persistProviderKey}
+        onRemoveProviderKey={deleteProviderKey}
         providerModels={providerModels}
         setProviderModel={changeProviderModel}
         modelCatalogs={modelCatalogs}
@@ -829,7 +878,7 @@ export default function AppShell() {
                     <span className="inline-flex items-center gap-2 rounded-2xl bg-moss px-5 py-3 font-sans text-sm font-extrabold text-cream shadow-[0_3px_0_#0e4740] transition group-hover:bg-moss-deep dark:bg-persimmon-dark dark:text-[#2b1206] dark:shadow-[0_3px_0_#b4532a]"><FileText size={17} />Browse files</span>
                     <span className="inline-flex items-center gap-2 rounded-2xl border-2 border-moss/30 px-5 py-[10px] font-sans text-sm font-bold text-moss-deep dark:border-white/15 dark:text-text-dark"><Sparkles size={15} />or pick a sample below</span>
                   </div>
-                  <p className="mt-4 inline-flex items-center gap-1.5 text-[11px] font-semibold text-ink-soft/90 dark:text-text-dark-soft/80"><Lock size={11} />Keys and documents stay in memory and clear on reload.</p>
+                  <p className="mt-4 inline-flex items-center gap-1.5 text-[11px] font-semibold text-ink-soft/90 dark:text-text-dark-soft/80"><Lock size={11} />Documents and unsaved keys stay in memory and clear on reload.</p>
                 </div>
               </section>
             ) : null}

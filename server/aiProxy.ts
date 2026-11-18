@@ -37,17 +37,20 @@ export interface GatewayRequestMetadata {
 }
 
 interface ChatMessage {
-  role: 'system' | 'user' | 'assistant'
+  role: 'system' | 'developer' | 'user' | 'assistant'
   content: string
 }
 
-interface ChatPayload {
+type ChatPayload = {
   model: string
   messages: ChatMessage[]
-  temperature: number
-  max_tokens: number
-  top_p: number
-  response_format: { type: 'json_object' }
+  temperature?: number
+  max_tokens?: number
+  max_completion_tokens?: number
+  top_p?: number
+  response_format?: { type: 'json_object' }
+  reasoning_format?: 'hidden'
+  reasoning_effort?: 'low'
 }
 
 const MAX_REQUEST_BYTES = 2_000_000
@@ -82,7 +85,7 @@ function classifyError(status: number, value: unknown): string {
   if ((status === 400 || status === 422) && /(?:failed_generation|json_validate_failed|failed to generate json|generated json does not match)/.test(text)) return 'output'
   if (status === 408 || status === 409 || status === 425 || status >= 500) return 'temporary'
   if (status === 413) return 'context'
-  if (status === 404 || /model.{0,40}(?:not found|does not exist|unsupported|unavailable|deprecated)/.test(text)) return 'model'
+  if (status === 404 || status === 410 || /model.{0,40}(?:not found|does not exist|unsupported|unavailable|deprecated)/.test(text)) return 'model'
   return 'request'
 }
 
@@ -114,24 +117,28 @@ function validateApiKey(value: unknown): string | null {
   return key && key.length <= 512 && !containsControlCharacter(key) ? key : null
 }
 
-function validateChatPayload(value: unknown): ChatPayload | null {
-  if (!isPlainRecord(value) || !hasOnlyKeys(value, ['model', 'messages', 'temperature', 'max_tokens', 'top_p', 'response_format'])) return null
+function validateChatPayload(provider: ProviderId, value: unknown): ChatPayload | null {
+  if (!isPlainRecord(value) || !hasOnlyKeys(value, [
+    'model', 'messages', 'temperature', 'max_tokens', 'max_completion_tokens', 'top_p',
+    'response_format', 'reasoning_format', 'reasoning_effort',
+  ])) return null
   const model = typeof value.model === 'string' ? value.model.trim() : ''
   if (!model || model.length > 200 || containsControlCharacter(model)) return null
   if (!Array.isArray(value.messages) || value.messages.length === 0 || value.messages.length > MAX_MESSAGES) return null
 
   const messages: ChatMessage[] = []
   let totalCharacters = 0
-  let systemMessages = 0
+  let instructionMessages = 0
   let hasUserMessage = false
   for (let index = 0; index < value.messages.length; index += 1) {
     const item = value.messages[index]
     if (!isPlainRecord(item) || !hasOnlyKeys(item, ['role', 'content'])) return null
-    if (item.role !== 'system' && item.role !== 'user' && item.role !== 'assistant') return null
+    if (item.role !== 'system' && item.role !== 'developer' && item.role !== 'user' && item.role !== 'assistant') return null
+    if (item.role === 'developer' && provider !== 'openai') return null
     if (typeof item.content !== 'string' || item.content.length === 0 || item.content.length > MAX_MESSAGE_CHARS) return null
-    if (item.role === 'system') {
-      systemMessages += 1
-      if (index !== 0 || systemMessages > 1) return null
+    if (item.role === 'system' || item.role === 'developer') {
+      instructionMessages += 1
+      if (index !== 0 || instructionMessages > 1) return null
     }
     if (item.role === 'user') hasUserMessage = true
     totalCharacters += item.content.length
@@ -142,13 +149,28 @@ function validateChatPayload(value: unknown): ChatPayload | null {
 
   const temperature = value.temperature
   const maxTokens = value.max_tokens
+  const maxCompletionTokens = value.max_completion_tokens
   const topP = value.top_p
-  if (typeof temperature !== 'number' || !Number.isFinite(temperature) || temperature < 0 || temperature > 1.2) return null
-  if (typeof maxTokens !== 'number' || !Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 4_096) return null
-  if (typeof topP !== 'number' || !Number.isFinite(topP) || topP <= 0 || topP > 1) return null
-  if (!isPlainRecord(value.response_format) || !hasOnlyKeys(value.response_format, ['type']) || value.response_format.type !== 'json_object') return null
+  if (temperature !== undefined && (typeof temperature !== 'number' || !Number.isFinite(temperature) || temperature < 0 || temperature > 1.2)) return null
+  if ((maxTokens === undefined) === (maxCompletionTokens === undefined)) return null
+  if (maxTokens !== undefined && (typeof maxTokens !== 'number' || !Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 4_096)) return null
+  if (maxCompletionTokens !== undefined && (typeof maxCompletionTokens !== 'number' || !Number.isInteger(maxCompletionTokens) || maxCompletionTokens < 1 || maxCompletionTokens > 4_096)) return null
+  if (topP !== undefined && (typeof topP !== 'number' || !Number.isFinite(topP) || topP <= 0 || topP > 1)) return null
+  if (value.response_format !== undefined && (!isPlainRecord(value.response_format) || !hasOnlyKeys(value.response_format, ['type']) || value.response_format.type !== 'json_object')) return null
+  if (value.reasoning_format !== undefined && (provider !== 'groq' || value.reasoning_format !== 'hidden')) return null
+  if (value.reasoning_effort !== undefined && ((provider !== 'groq' && provider !== 'nvidia') || value.reasoning_effort !== 'low')) return null
 
-  return { model, messages, temperature, max_tokens: maxTokens, top_p: topP, response_format: { type: 'json_object' } }
+  return {
+    model,
+    messages,
+    ...(temperature === undefined ? {} : { temperature }),
+    ...(maxTokens === undefined ? {} : { max_tokens: maxTokens }),
+    ...(maxCompletionTokens === undefined ? {} : { max_completion_tokens: maxCompletionTokens }),
+    ...(topP === undefined ? {} : { top_p: topP }),
+    ...(value.response_format === undefined ? {} : { response_format: { type: 'json_object' as const } }),
+    ...(value.reasoning_format === undefined ? {} : { reasoning_format: 'hidden' as const }),
+    ...(value.reasoning_effort === undefined ? {} : { reasoning_effort: 'low' as const }),
+  }
 }
 
 class UpstreamResponseError extends Error {
@@ -220,7 +242,7 @@ export async function proxyAIRequest(input: ProxyBody, apiKeyValue: unknown): Pr
   if (input.action === 'models') {
     if (input.payload !== undefined && input.payload !== null) return errorResult(400, 'request', 'Model discovery does not accept a request payload.')
   } else {
-    chatPayload = validateChatPayload(input.payload)
+    chatPayload = validateChatPayload(input.provider, input.payload)
     if (!chatPayload) return errorResult(400, 'request', 'The chat request does not match the permitted schema or limits.')
   }
 

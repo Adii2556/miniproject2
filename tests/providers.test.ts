@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
   discoverProviderModels,
   normalizeModelCatalog,
+  PROVIDER_REQUEST_TIMEOUT_MS,
   providerErrorCategory,
   runProviderCompletion,
   testProviderModel,
@@ -59,6 +60,19 @@ describe('provider discovery and compatibility', () => {
     expect((fetchMock.mock.calls[0][1] as RequestInit).credentials).toBe('omit')
   })
 
+  test('reports a malformed local key as authentication instead of a network outage', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    let failure: unknown
+    try {
+      await discoverProviderModels('groq', 'gsk-invalid\u0000key')
+    } catch (error) {
+      failure = error
+    }
+    expect(providerErrorCategory(failure)).toBe('auth')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   test('sends a gateway-valid lightweight compatibility request', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       choices: [{ message: { content: '{"compatible":true}' } }],
@@ -79,11 +93,52 @@ describe('provider discovery and compatibility', () => {
       payload: {
         model: 'nvidia/test-chat-model',
         temperature: 0,
-        max_tokens: 256,
-        top_p: 1,
-        response_format: { type: 'json_object' },
+        max_tokens: 1_024,
+        top_p: 0.95,
       },
     })
+    expect(request.payload).not.toHaveProperty('response_format')
+  })
+
+  test('shapes chat parameters for each provider instead of assuming one compatible API', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
+      choices: [{ message: { content: '{"ok":true}' } }],
+    }), { status: 200 })))
+    vi.stubGlobal('fetch', fetchMock)
+    const messages = [
+      { role: 'system' as const, content: 'Return JSON.' },
+      { role: 'user' as const, content: 'Do it.' },
+    ]
+
+    const run = (provider: 'groq' | 'nvidia' | 'deepseek' | 'openai', model: string) => runProviderCompletion({
+      mode: 'manual', activeProvider: provider, priority: [provider],
+      providers: { [provider]: { provider, apiKey: 'test-key', model, consent: true } },
+    }, messages, { maxTokens: 512, temperature: 0.4 })
+
+    await run('groq', 'openai/gpt-oss-120b')
+    await run('nvidia', 'openai/gpt-oss-120b')
+    await run('deepseek', 'deepseek-chat')
+    await run('openai', 'o3-mini')
+
+    const bodies = fetchMock.mock.calls.map(call => JSON.parse(String((call[1] as RequestInit).body)).payload as Record<string, unknown>)
+    expect(bodies[0]).toMatchObject({
+      max_completion_tokens: 512,
+      reasoning_format: 'hidden',
+      reasoning_effort: 'low',
+      response_format: { type: 'json_object' },
+    })
+    expect(bodies[0]).not.toHaveProperty('max_tokens')
+    expect(bodies[1]).toMatchObject({ max_tokens: 512, reasoning_effort: 'low' })
+    expect(bodies[1]).not.toHaveProperty('response_format')
+    expect(bodies[2]).toMatchObject({ max_tokens: 512, response_format: { type: 'json_object' } })
+    expect(bodies[3]).toMatchObject({
+      max_completion_tokens: 512,
+      messages: [{ role: 'developer', content: 'Return JSON.' }, { role: 'user', content: 'Do it.' }],
+      response_format: { type: 'json_object' },
+    })
+    expect(bodies[3]).not.toHaveProperty('max_tokens')
+    expect(bodies[3]).not.toHaveProperty('temperature')
+    expect(bodies[3]).not.toHaveProperty('top_p')
   })
 
   test('exposes only the safe provider failure category to compatibility state', async () => {
@@ -174,6 +229,52 @@ describe('provider fallback and proxy privacy', () => {
     expect(events).not.toContain('retry')
   })
 
+  test('gives a fallback provider a fresh timeout after a stalled request', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.fn()
+      .mockImplementationOnce((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const execution: AIExecutionConfig = {
+      mode: 'automatic', activeProvider: 'nvidia', priority: ['nvidia', 'deepseek'],
+      providers: {
+        nvidia: { provider: 'nvidia', apiKey: 'nvapi-test', model: 'nvidia/slow-model', consent: true },
+        deepseek: { provider: 'deepseek', apiKey: 'sk-test', model: 'deepseek-chat', consent: true },
+      },
+    }
+    const request = runProviderCompletion(execution, [{ role: 'user', content: 'Return JSON.' }], { maxTokens: 32, temperature: 0 })
+    await vi.advanceTimersByTimeAsync(PROVIDER_REQUEST_TIMEOUT_MS + 1_000)
+    await expect(request).resolves.toMatchObject({ provider: 'deepseek', content: '{"ok":true}' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  test('accepts and forwards the strict provider-specific payload variants', async () => {
+    const upstream = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), { status: 200 })))
+    vi.stubGlobal('fetch', upstream)
+    const messages = [{ role: 'user' as const, content: 'Return JSON.' }]
+    const requests = [
+      proxyAIRequest({ action: 'chat', provider: 'groq', payload: {
+        model: 'openai/gpt-oss-120b', messages, max_completion_tokens: 256, temperature: 0.2,
+        top_p: 0.95, response_format: { type: 'json_object' }, reasoning_format: 'hidden', reasoning_effort: 'low',
+      } }, 'gsk-test'),
+      proxyAIRequest({ action: 'chat', provider: 'nvidia', payload: {
+        model: 'openai/gpt-oss-120b', messages, max_tokens: 256, temperature: 0.2, top_p: 0.95, reasoning_effort: 'low',
+      } }, 'nvapi-test'),
+      proxyAIRequest({ action: 'chat', provider: 'openai', payload: {
+        model: 'o3-mini', messages: [{ role: 'developer', content: 'Return JSON.' }, ...messages],
+        max_completion_tokens: 256, response_format: { type: 'json_object' },
+      } }, 'sk-test'),
+    ]
+    await expect(Promise.all(requests)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: 200 }),
+      expect.objectContaining({ status: 200 }),
+      expect.objectContaining({ status: 200 }),
+    ]))
+    expect(upstream).toHaveBeenCalledTimes(3)
+  })
+
   test('retries a structured-output generation failure instead of treating it as a permanent 400', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -255,6 +356,17 @@ describe('provider fallback and proxy privacy', () => {
       body: { error: { category: 'output', message: 'Groq could not produce valid structured JSON for this request.' } },
     })
     expect(JSON.stringify(result.body)).not.toContain('private document text')
+  })
+
+  test('classifies a retired provider model as a model error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: 'This model is no longer available.',
+    }), { status: 410 })))
+    const result = await proxyAIRequest({ action: 'chat', provider: 'nvidia', payload: validChatPayload }, 'nvapi-test')
+    expect(result).toMatchObject({
+      status: 410,
+      body: { error: { category: 'model', message: 'NVIDIA NIM does not support the selected model for this request.' } },
+    })
   })
 
   test('bounds oversized and stalled upstream responses without leaking provider data', async () => {

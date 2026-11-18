@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
 import {
   ArrowDown, ArrowUp, CheckCircle2, ChevronDown, CircleHelp, Eye, EyeOff,
-  ExternalLink, KeyRound, Loader2, RefreshCw, Search, ShieldCheck, TestTube2,
+  ExternalLink, KeyRound, Loader2, RefreshCw, Save, Search, ShieldAlert, ShieldCheck,
+  TestTube2, Trash2,
 } from 'lucide-react'
 import {
   PROVIDERS,
@@ -11,6 +12,7 @@ import {
   type ProviderMode,
   type ProviderStatus,
 } from '../lib/aiProviders'
+import type { ProviderKeyPersistence } from '../lib/providerKeyStorage'
 
 interface ProviderSettingsProps {
   mode: ProviderMode
@@ -20,7 +22,10 @@ interface ProviderSettingsProps {
   priority: ProviderId[]
   onPriorityChange: (priority: ProviderId[]) => void
   keys: Record<ProviderId, string>
+  keyPersistence: Record<ProviderId, ProviderKeyPersistence>
   onKeyChange: (provider: ProviderId, key: string) => void
+  onSaveKey: (provider: ProviderId) => void
+  onRemoveKey: (provider: ProviderId) => void
   models: Record<ProviderId, string>
   onModelChange: (provider: ProviderId, model: string) => void
   catalogs: Partial<Record<ProviderId, ModelMetadata[]>>
@@ -41,7 +46,7 @@ function compatibilityLabel(model: ModelMetadata | undefined) {
 export default function ProviderSettings(props: ProviderSettingsProps) {
   const {
     mode, onModeChange, activeProvider, onActiveProviderChange, priority, onPriorityChange,
-    keys, onKeyChange, models, onModelChange, catalogs, statuses, errors, consents,
+    keys, keyPersistence, onKeyChange, onSaveKey, onRemoveKey, models, onModelChange, catalogs, statuses, errors, consents,
     onConsentChange, onConnect, onTest, disabled,
   } = props
   const [reveal, setReveal] = useState<Record<ProviderId, boolean>>({ groq: false, nvidia: false, deepseek: false, openai: false })
@@ -52,6 +57,7 @@ export default function ProviderSettings(props: ProviderSettingsProps) {
   const indicator = compatibilityLabel(selected)
   const listId = `models-${activeProvider}`
   const connectionLabel = statuses[activeProvider] === 'ready' ? 'Connected' : statuses[activeProvider] === 'validating' ? 'Checking' : statuses[activeProvider] === 'error' ? 'Needs attention' : 'Not checked'
+  const persistence = keyPersistence[activeProvider]
   const modelSummary = useMemo(() => {
     if (catalog.length === 0) return 'No cached catalog. Validate the key or enter a model ID manually.'
     const verified = catalog.filter(model => model.compatibility === 'verified').length
@@ -94,14 +100,23 @@ export default function ProviderSettings(props: ProviderSettingsProps) {
           <span className="inline-flex items-center gap-1.5"><KeyRound size={13} className="text-gold-dark" />{provider.shortLabel} API key</span>
           {statuses[activeProvider] === 'ready' ? <CheckCircle2 size={14} className="text-emerald-400" /> : statuses[activeProvider] === 'validating' ? <Loader2 size={14} className="animate-spin text-gold-dark" /> : null}
         </label>
-        <div className="relative mt-2">
-          <input id={`${activeProvider}-key`} type={reveal[activeProvider] ? 'text' : 'password'} value={keys[activeProvider]} disabled={disabled} onChange={event => onKeyChange(activeProvider, event.target.value)} onBlur={() => { if (keys[activeProvider].trim() && consents[activeProvider] && statuses[activeProvider] === 'idle') onConnect(activeProvider) }} placeholder={provider.keyPlaceholder} autoComplete="new-password" spellCheck={false} className="w-full rounded-xl border border-white/12 bg-black/30 py-2.5 pl-3 pr-11 font-mono text-[12px] text-text-dark placeholder:text-text-dark-soft/40 outline-none focus:border-gold-dark/60" />
-          <button type="button" onClick={() => setReveal(value => ({ ...value, [activeProvider]: !value[activeProvider] }))} aria-label={reveal[activeProvider] ? 'Hide key' : 'Show key'} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-text-dark-soft hover:bg-white/10 hover:text-text-dark">{reveal[activeProvider] ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+        <div className="mt-2 flex items-stretch gap-2">
+          <div className="relative min-w-0 flex-1">
+            <input id={`${activeProvider}-key`} type={reveal[activeProvider] ? 'text' : 'password'} value={keys[activeProvider]} disabled={disabled} onChange={event => onKeyChange(activeProvider, event.target.value)} onBlur={() => { if (keys[activeProvider].trim() && consents[activeProvider] && statuses[activeProvider] === 'idle') onConnect(activeProvider) }} placeholder={provider.keyPlaceholder} autoComplete="new-password" spellCheck={false} className="w-full rounded-xl border border-white/12 bg-black/30 py-2.5 pl-3 pr-11 font-mono text-[12px] text-text-dark placeholder:text-text-dark-soft/40 outline-none focus:border-gold-dark/60" />
+            <button type="button" onClick={() => setReveal(value => ({ ...value, [activeProvider]: !value[activeProvider] }))} aria-label={reveal[activeProvider] ? 'Hide key' : 'Show key'} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-text-dark-soft hover:bg-white/10 hover:text-text-dark">{reveal[activeProvider] ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+          </div>
+          <button type="button" disabled={disabled || !keys[activeProvider].trim() || persistence === 'saved'} onClick={() => onSaveKey(activeProvider)} aria-label={`${persistence === 'changed' ? 'Update' : 'Save'} ${provider.shortLabel} API key in this browser`} className="inline-flex min-w-[72px] items-center justify-center gap-1.5 rounded-xl border border-gold-dark/35 bg-gold-dark/10 px-2.5 text-[10.5px] font-extrabold text-gold-dark transition hover:bg-gold-dark/20 disabled:cursor-not-allowed disabled:opacity-45">
+            {persistence === 'saved' ? <CheckCircle2 size={13} /> : <Save size={13} />}{persistence === 'changed' ? 'Update' : persistence === 'saved' ? 'Saved' : 'Save'}
+          </button>
         </div>
         <div className="mt-2.5 flex items-center justify-between gap-2">
-          <p className="text-[10px] font-medium text-text-dark-soft">Memory-only · cleared on reload</p>
-          <a href={provider.keyUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[10.5px] font-bold text-gold-dark hover:underline">Get key<ExternalLink size={10} /></a>
+          <p className="text-[10px] font-medium text-text-dark-soft">{persistence === 'saved' ? 'Saved in this browser' : persistence === 'changed' ? 'Saved copy differs · update to keep changes' : 'Memory-only · cleared on reload'}</p>
+          <span className="inline-flex shrink-0 items-center gap-2">
+            {persistence !== 'unsaved' ? <button type="button" disabled={disabled} onClick={() => onRemoveKey(activeProvider)} aria-label={`Remove ${provider.shortLabel} API key from this browser`} className="inline-flex items-center gap-1 text-[10.5px] font-bold text-[#ffb3a0] hover:underline disabled:opacity-45"><Trash2 size={10} />Remove</button> : null}
+            <a href={provider.keyUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[10.5px] font-bold text-gold-dark hover:underline">Get key<ExternalLink size={10} /></a>
+          </span>
         </div>
+        <p className="mt-2.5 flex items-start gap-1.5 rounded-lg border border-[#ffb3a0]/15 bg-[#ffb3a0]/[0.05] p-2 text-[9.5px] font-medium leading-relaxed text-text-dark-soft"><ShieldAlert size={12} className="mt-0.5 shrink-0 text-[#ffb3a0]" />Browser-local storage is not fully secure. Do not save keys on a shared device.</p>
         <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-xl border border-white/10 bg-black/15 p-2.5 text-[10.5px] font-semibold leading-relaxed text-text-dark-soft">
           <input type="checkbox" checked={consents[activeProvider]} disabled={disabled} onChange={event => onConsentChange(activeProvider, event.target.checked)} className="mt-0.5 accent-[#ff8a5c]" />
           <span><strong className="text-text-dark">Allow API usage and document sharing.</strong> Model checks and analysis send requests to this provider and may consume quota or incur charges.</span>

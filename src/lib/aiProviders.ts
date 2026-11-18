@@ -161,6 +161,15 @@ function retryAfterMs(value: string | null): number {
 }
 
 async function proxyRequest(body: Record<string, unknown>, apiKey: string, signal?: AbortSignal): Promise<unknown> {
+  const validatedKey = validateKey(apiKey)
+  const controller = new AbortController()
+  const abortFromParent = () => controller.abort(signal?.reason ?? new DOMException('Aborted', 'AbortError'))
+  if (signal?.aborted) abortFromParent()
+  else signal?.addEventListener('abort', abortFromParent, { once: true })
+  const timeout = globalThis.setTimeout(
+    () => controller.abort(new DOMException('Provider request timed out', 'TimeoutError')),
+    PROVIDER_REQUEST_TIMEOUT_MS,
+  )
   let response: Response
   try {
     response = await fetch('/api/ai', {
@@ -168,19 +177,26 @@ async function proxyRequest(body: Record<string, unknown>, apiKey: string, signa
       headers: {
         'Content-Type': 'application/json',
         'X-DocLense-Request': '1',
-        'X-DocLense-Provider-Key': validateKey(apiKey),
+        'X-DocLense-Provider-Key': validatedKey,
       },
       body: JSON.stringify(body),
-      signal,
+      signal: controller.signal,
       credentials: 'omit',
       referrerPolicy: 'no-referrer',
     })
   } catch (error) {
-    if ((error as Error).name === 'AbortError') throw error
+    globalThis.clearTimeout(timeout)
+    signal?.removeEventListener('abort', abortFromParent)
+    if (signal?.aborted) throw signal.reason ?? error
+    if (controller.signal.aborted) throw new ProviderRequestError('The provider gateway took too long to respond.', 'temporary', 504)
+    if (error instanceof ProviderRequestError) throw error
     throw new ProviderRequestError('The provider gateway could not be reached.', 'network', 0)
   }
   let payload: unknown
-  try { payload = await response.json() } catch { payload = null }
+  try { payload = await response.json() } catch { payload = null } finally {
+    globalThis.clearTimeout(timeout)
+    signal?.removeEventListener('abort', abortFromParent)
+  }
   if (!response.ok) {
     const safe = payload as ProxyErrorBody | null
     const rawCategory = safe?.error?.category
@@ -222,20 +238,16 @@ function parseCompatibilityResult(content: string): boolean {
 }
 
 export async function testProviderModel(runtime: ProviderRuntime, signal?: AbortSignal): Promise<void> {
-  const response = await proxyRequest({
+  const rawResponse = await proxyRequest({
     action: 'chat', provider: runtime.provider,
-    payload: {
-      model: runtime.model,
-      temperature: 0,
-      max_tokens: 256,
-      top_p: 1,
-      response_format: { type: 'json_object' },
-      messages: [
+    payload: providerChatPayload(runtime, [
         { role: 'system', content: 'Return valid JSON only.' },
         { role: 'user', content: 'Return {"compatible":true}.' },
-      ],
-    },
-  }, runtime.apiKey, signal) as { choices?: Array<{ finish_reason?: string; message?: { content?: string } }> }
+      ], 1_024, 0),
+  }, runtime.apiKey, signal)
+  const response = rawResponse && typeof rawResponse === 'object'
+    ? rawResponse as { choices?: Array<{ finish_reason?: string; message?: { content?: string } }> }
+    : {}
   const content = response.choices?.[0]?.message?.content?.trim() ?? ''
   if (parseCompatibilityResult(content)) return
   const endedEarly = response.choices?.[0]?.finish_reason === 'length' || !content
@@ -300,6 +312,7 @@ class SharedRequestQueue {
 }
 
 const requestQueue = new SharedRequestQueue()
+export const PROVIDER_REQUEST_TIMEOUT_MS = 130_000
 const wait = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
   const cleanup = () => signal?.removeEventListener('abort', abort)
   const timer = globalThis.setTimeout(() => { cleanup(); resolve() }, ms)
@@ -318,9 +331,62 @@ function executionOrder(config: AIExecutionConfig): ProviderRuntime[] {
   })
 }
 
+type CompletionMessage = { role: 'system' | 'user' | 'assistant'; content: string }
+
+const openAIReasoningModelPattern = /^(?:o[1-9](?:-|$)|gpt-[5-9](?:[.-]|$))/i
+const groqReasoningModelPattern = /(?:gpt-oss|qwen3|deepseek-r1|qwq|thinking)/i
+const nvidiaReasoningModelPattern = /(?:gpt-oss|reasoning|thinking|qwq)/i
+
+function providerChatPayload(
+  runtime: ProviderRuntime,
+  messages: CompletionMessage[],
+  maxTokens: number,
+  temperature: number,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    model: runtime.model,
+    messages,
+    max_tokens: maxTokens,
+  }
+
+  if (runtime.provider === 'openai') {
+    delete payload.max_tokens
+    payload.max_completion_tokens = maxTokens
+    payload.response_format = { type: 'json_object' }
+    if (openAIReasoningModelPattern.test(runtime.model)) {
+      payload.messages = messages.map((message, index) => index === 0 && message.role === 'system'
+        ? { ...message, role: 'developer' }
+        : message)
+    } else {
+      payload.temperature = temperature
+      payload.top_p = 0.95
+    }
+    return payload
+  }
+
+  if (runtime.provider === 'groq') {
+    delete payload.max_tokens
+    payload.max_completion_tokens = maxTokens
+    payload.temperature = temperature
+    payload.top_p = 0.95
+    payload.response_format = { type: 'json_object' }
+    if (groqReasoningModelPattern.test(runtime.model)) {
+      payload.reasoning_format = 'hidden'
+      payload.reasoning_effort = 'low'
+    }
+    return payload
+  }
+
+  payload.temperature = temperature
+  payload.top_p = 0.95
+  if (runtime.provider === 'deepseek') payload.response_format = { type: 'json_object' }
+  if (runtime.provider === 'nvidia' && nvidiaReasoningModelPattern.test(runtime.model)) payload.reasoning_effort = 'low'
+  return payload
+}
+
 export async function runProviderCompletion(
   config: AIExecutionConfig,
-  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+  messages: CompletionMessage[],
   options: { maxTokens: number; temperature: number; signal?: AbortSignal; onEvent?: (event: ProviderEvent) => void },
 ): Promise<{ content: string; provider: ProviderId; model: string }> {
   const providers = executionOrder(config)
@@ -334,19 +400,22 @@ export async function runProviderCompletion(
     for (let attempt = 0; attempt < 3; attempt += 1) {
       options.onEvent?.({ type: 'attempt', provider: runtime.provider, model: runtime.model, message: `Using ${providerDefinition(runtime.provider).label} · ${runtime.model}` })
       try {
-        const payload = await requestQueue.enqueue(runtime.provider, estimatedTokens, () => proxyRequest({
+        const rawPayload = await requestQueue.enqueue(runtime.provider, estimatedTokens, () => proxyRequest({
           action: 'chat', provider: runtime.provider,
-          payload: {
-            model: runtime.model,
-            temperature: options.temperature,
-            max_tokens: options.maxTokens,
-            top_p: 0.95,
-            response_format: { type: 'json_object' },
-            messages,
-          },
-        }, runtime.apiKey, options.signal), options.signal) as { choices?: Array<{ message?: { content?: string } }> }
-        const content = payload.choices?.[0]?.message?.content ?? ''
-        if (!content.trim()) throw new ProviderRequestError(`${providerDefinition(runtime.provider).label} returned an empty response.`, 'temporary', 502)
+          payload: providerChatPayload(runtime, messages, options.maxTokens, options.temperature),
+        }, runtime.apiKey, options.signal), options.signal)
+        const payload = rawPayload && typeof rawPayload === 'object'
+          ? rawPayload as { choices?: Array<{ finish_reason?: string; message?: { content?: string; refusal?: string } }> }
+          : {}
+        const choice = payload.choices?.[0]
+        const content = choice?.message?.content ?? ''
+        if (choice?.message?.refusal) throw new ProviderRequestError(`${providerDefinition(runtime.provider).label} declined this request.`, 'request', 422)
+        if (!content.trim()) {
+          const reason = choice?.finish_reason === 'length'
+            ? `${providerDefinition(runtime.provider).label} used the output budget before returning JSON.`
+            : `${providerDefinition(runtime.provider).label} returned no JSON content.`
+          throw new ProviderRequestError(reason, 'output', 422)
+        }
         return { content, provider: runtime.provider, model: runtime.model }
       } catch (error) {
         if ((error as Error).name === 'AbortError') throw error

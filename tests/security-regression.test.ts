@@ -32,7 +32,8 @@ describe('security regression boundaries', () => {
   test('keeps provider credentials out of JSON bodies and validates gateway requests', () => {
     const client = read('src/lib/aiProviders.ts')
     const gateway = read('server/aiProxy.ts')
-    expect(client).toContain("'X-DocLense-Provider-Key': validateKey(apiKey)")
+    expect(client).toContain("'X-DocLense-Provider-Key': validatedKey")
+    expect(client).toContain('const validatedKey = validateKey(apiKey)')
     expect(client).not.toMatch(/body:\s*JSON\.stringify\([^)]*apiKey/)
     expect(gateway).toContain('sameOriginRequest')
     expect(gateway).toContain('validateChatPayload')

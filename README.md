@@ -78,7 +78,7 @@ npm run dev
 Open the local URL printed by Vite, normally `http://127.0.0.1:5173`, and enter the Studio.
 Open the local URL printed by Vite, normally `http://127.0.0.1:5173`, and enter the Studio. Select a provider, paste a personal API key, validate its model catalog, and explicitly allow API usage. Never put shared secrets in `VITE_*` variables because Vite exposes them in browser assets.
 
-**No `.env` file, database initialization, or application environment variables are required.** Paste a personal provider key into the Studio when you want to generate results. Keys remain in memory and must never be committed.
+**No `.env` file, database initialization, or application environment variables are required.** Paste a personal provider key into the Studio when you want to generate results. Unsaved keys remain in memory. The optional Save action stores a key in that browser's local storage for later visits; browser-local storage is not fully secure, so do not use it on a shared device. Keys must never be committed.
 
 ### Analyze a document
 
@@ -96,7 +96,7 @@ On mobile, open the settings menu to enter your key and adjust analysis options.
 - Files are limited to **15 MB each**, with **six documents** per workspace. PDF extraction supports up to **250 pages**; extracted PDF text and plain-text inputs are capped at **1,000,000 characters per file**.
 - **Sampled mode** selects chunks across documents. **Complete mode** attempts every extracted chunk within the configured budget and rejects a workspace that exceeds that budget. Coverage describes chunk selection, not factual accuracy or guaranteed retention of every detail in the final answer.
 - OCR is **English-only**, limited to the **first 10 pages**, and may introduce recognition errors.
-- The key, documents, results, and chat use memory rather than persistent browser storage. Reloading clears them; navigating away from the Studio can also clear its active workspace. Theme and analysis preferences may persist locally. Export anything you want to keep.
+- Unsaved keys, documents, results, and chat use memory rather than persistent browser storage. Reloading clears them; navigating away from the Studio can also clear its active workspace. A key persists only after the user explicitly selects Save, and can be updated or removed from the same control. Theme and analysis preferences may also persist locally. Export anything you want to keep.
 - Starting generation or Q&A sends only selected source context and your request to the approved provider through `/api/ai`. Recent chat turns may also be included for Q&A. Review documents before sending them and follow the provider's applicable terms and data policies.
 - Model availability, account limits, response quality, and request charges depend on the selected provider. The app provides no measured accuracy guarantee.
 
@@ -185,7 +185,7 @@ npm run test:headers
 - Complete mode refuses work that exceeds its configured budget instead of silently dropping sections.
 - OCR is English-only, may be inaccurate, and processes at most the first 10 pages.
 - Exact quotation can be verified mechanically; whether evidence truly entails a claim is estimated lexically and marked verified or uncertain. Important decisions still require human source review.
-- The selected provider receives the selected document context and question/instructions. Its user-supplied API key passes transiently through the same-origin Vercel function into the provider authorization header; DocLense does not persist or log it.
+- The selected provider receives the selected document context and question/instructions. Its user-supplied API key passes transiently through the same-origin Vercel function into the provider authorization header; DocLense does not log it. Unless the user explicitly selects Save, the key remains memory-only. Saved keys stay in the browser-local store until removed.
 - Provider catalogs do not expose uniform capability metadata. Known non-text models are filtered, likely chat models are marked suitable, and incomplete metadata remains unverified until the user runs the optional compatibility test.
 
 ## Deployment

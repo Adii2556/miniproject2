@@ -38,7 +38,7 @@ Provider JSON → schema validation → exact quote + support checks → UI/read
 
 ## Provider privacy boundary
 
-- API keys live only in React memory and clear on reload. Only non-sensitive mode, priority, and model IDs persist locally; model catalogs use a 15-minute session cache.
+- API keys live in React memory and clear on reload by default. An explicit Save action persists only the selected provider key in browser local storage; Update replaces it and Remove deletes it. Restoring a saved key does not restore consent or initiate a request. Non-sensitive mode, priority, and model IDs also persist locally; model catalogs use a 15-minute session cache.
 - The browser calls only `/api/ai`. The proxy selects upstream URLs from a fixed provider allowlist, rejects oversized requests, disables caching, and never returns upstream bodies on errors.
 - Automatic mode skips providers without an API key, model, explicit usage consent, or a model classified as incompatible.
 

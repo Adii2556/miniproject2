@@ -9,6 +9,7 @@ import DocLenseLogo from './DocLenseLogo'
 import ProviderSettings from './ProviderSettings'
 import type { ModelMetadata, ProviderId, ProviderMode, ProviderStatus } from '../lib/aiProviders'
 import type { HistoryEntry } from '../lib/history'
+import type { ProviderKeyPersistence } from '../lib/providerKeyStorage'
 
 interface SidebarProps {
   open: boolean
@@ -20,7 +21,10 @@ interface SidebarProps {
   providerPriority: ProviderId[]
   setProviderPriority: (priority: ProviderId[]) => void
   providerKeys: Record<ProviderId, string>
+  providerKeyPersistence: Record<ProviderId, ProviderKeyPersistence>
   setProviderKey: (provider: ProviderId, key: string) => void
+  onSaveProviderKey: (provider: ProviderId) => void
+  onRemoveProviderKey: (provider: ProviderId) => void
   providerModels: Record<ProviderId, string>
   setProviderModel: (provider: ProviderId, model: string) => void
   modelCatalogs: Partial<Record<ProviderId, ModelMetadata[]>>
@@ -89,7 +93,8 @@ function CollapsibleSection({
 export default function Sidebar(props: SidebarProps) {
   const {
     open, onClose, providerMode, setProviderMode, activeProvider, setActiveProvider,
-    providerPriority, setProviderPriority, providerKeys, setProviderKey, providerModels,
+    providerPriority, setProviderPriority, providerKeys, providerKeyPersistence, setProviderKey,
+    onSaveProviderKey, onRemoveProviderKey, providerModels,
     setProviderModel, modelCatalogs, providerStatuses, providerErrors, providerConsents,
     setProviderConsent, onConnectProvider, onTestProvider,
     settings, updateSettings, onResetSettings, history, onClearHistory, onPickHistory, disabled,
@@ -155,7 +160,10 @@ export default function Sidebar(props: SidebarProps) {
               priority={providerPriority}
               onPriorityChange={setProviderPriority}
               keys={providerKeys}
+              keyPersistence={providerKeyPersistence}
               onKeyChange={setProviderKey}
+              onSaveKey={onSaveProviderKey}
+              onRemoveKey={onRemoveProviderKey}
               models={providerModels}
               onModelChange={setProviderModel}
               catalogs={modelCatalogs}
